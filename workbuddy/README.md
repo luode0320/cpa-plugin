@@ -31,6 +31,13 @@ dashboard.
 - **Dashboard** — embedded panel at `/v0/resource/plugins/workbuddy/panel`
   with credits progress bars, plan badges, exhausted/disabled flags, region
   filter, and credential import.
+- **Token usage statistics** — merged from the community
+  `cap-token-usage-tracker`: every request's token consumption (input / output
+  / reasoning / cache) is recorded locally into a bbolt database directly from
+  the executor chain (no dependency on the host's `UsagePlugin` broadcast) and
+  shown on a dedicated page at `/v0/resource/plugins/workbuddy/usage`
+  (menu "Token 用量") with trends, per-model/account breakdowns, request
+  history and cost estimates.
 - **Scheduler** (optional) — `scheduler_mode` defaults to `session`: conversations
   spread across accounts (same conversation stays on one account for up to 1h).
   `credits` pins to the panel-selected account; `off` defers to CPA's built-in
@@ -131,6 +138,18 @@ plugins:
       # When empty (default) the host's management middleware is the only
       # guard. Also readable from WB_MANAGEMENT_KEY env var.
       management_key: ""
+
+      # Local token usage statistics (default enabled). Failures only disable
+      # statistics; chat and CPAMP forwarding are unaffected.
+      usage_stats_enabled: true
+      # Optional database path (default <CLIProxyAPI root>/data/usage-stats.db).
+      usage_stats_path: ""
+      # Retention in days (1-3650, default 365).
+      usage_retention_days: 365
+      # Async flush interval (1s-1h, default 5s).
+      usage_flush_interval: "5s"
+      # Max records buffered before forcing a flush (1-1000000, default 100).
+      usage_flush_max_records: 100
 ```
 
 Model aliases and exclusions are handled natively by CPA's

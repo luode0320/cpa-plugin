@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.8
+
+### Feature — 本地 Token 用量统计(合并 cap-token-usage-tracker)
+
+把社区插件 `cap-token-usage-tracker`(AITNR)合并进 workbuddy,解决"插件
+executor 请求宿主 UsagePlugin 广播为空、独立 token 统计插件检测不到消耗"
+的根因问题。
+
+- **数据源改造**:统计不再依赖宿主 `UsagePlugin` 广播(插件 executor 适配器
+  不发布 usage,广播队列恒为空),改为 workbuddy 执行链路内部采集——
+  `usage.go` 的 `publishUsage`(非流式/流式全部请求的汇聚点)在转发 CPAMP
+  的同时,把同一份 `usage.Detail` 写入本地 bbolt 库(`usage_stats` 子包,
+  actor 异步落盘,256 缓冲,不阻塞热路径)。
+- **新子包 `usage_stats/`**:移植 tracker 的存储/聚合/解码模块(usage、
+  aggregate、persistence、cost、pricing、modelsdev、exchange_rate、config、
+  preferences、dashboard、request_log、compression、handover + 4 语言
+  locales)。裁剪:full-mode 管理密钥会话、API Key 加密/指纹、
+  authRuntimeLookup 身份解析(改为直接用 auth_index=UID)。
+- **新配置项**(`config_yaml`,均可选,默认开箱即用):
+  - `usage_stats_enabled`(boolean,默认 true)
+  - `usage_stats_path`(string,默认 `<CLIProxyAPI root>/data/usage-stats.db`)
+  - `usage_retention_days`(integer,1-3650,默认 365)
+  - `usage_flush_interval`(string,1s-1h,默认 5s)
+  - `usage_flush_max_records`(integer,1-1000000,默认 100)
+- **新页面**:`/v0/resource/plugins/workbuddy/usage`(菜单 "Token 用量"),
+  与积分面板 `/panel` 并存。读接口(统计/趋势/分组/请求/成本/价格/偏好/
+  汇率)走 resource 路由,写接口(价格、重置)走 management 路由,纳入既有
+  `management_key` 鉴权/限流门。
+- **降级语义**:统计库打开失败仅禁用本地统计,chat 与 CPAMP 上报不受影响。
+- **测试**:新增 `usage_stats` 冒烟测试(bridge 调用链黑盒回归);
+  主包与子包全量测试通过。
+
 ## 0.8.7
 
 ### Change — `session` is now the default scheduler mode

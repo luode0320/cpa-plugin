@@ -327,7 +327,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.8.2"
+var version = "0.8.8"
 
 func wbRegistration() registration {
 	return registration{
@@ -346,6 +346,11 @@ func wbRegistration() registration {
 				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeSession, schedulerModeCredits, schedulerModeOff}, Description: "Multi-account selection: session (per-conversation round-robin, same conversation keeps one account for 1h; DEFAULT), credits (panel-selected sticky account), or off (defer to built-in). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or keep scheduler_mode=session/credits."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
 				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
+				{Name: "usage_stats_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable local token-usage statistics (merged cap-token-usage-tracker; default true). Dashboard at /v0/resource/plugins/workbuddy/usage."},
+				{Name: "usage_stats_path", Type: pluginapi.ConfigFieldTypeString, Description: "Optional bbolt database path for local usage statistics (default <CLIProxyAPI root>/data/usage-stats.db)."},
+				{Name: "usage_retention_days", Type: pluginapi.ConfigFieldTypeInteger, Description: "Local usage statistics retention in days (1-3650, default 365)."},
+				{Name: "usage_flush_interval", Type: pluginapi.ConfigFieldTypeString, Description: "Local usage statistics flush interval, Go duration (1s-1h, default 5s)."},
+				{Name: "usage_flush_max_records", Type: pluginapi.ConfigFieldTypeInteger, Description: "Max records buffered before forcing a flush (1-1000000, default 100)."},
 			},
 		},
 		Capabilities: registrationCapability{

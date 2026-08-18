@@ -77,7 +77,14 @@ func publishUsage(requestedModel, upstreamModel, authID string, started time.Tim
 	// Fire-and-forget so the executor hot path never blocks on the CPAMP
 	// round-trip. handleUsage (the host-driven path) is synchronous because the
 	// host already runs it on its own goroutine after the request completes.
-	go forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
+	go func() {
+		// Local statistics (merged token tracker): record the same detail into
+		// bbolt. Runs inside the goroutine so a saturated actor channel never
+		// stalls the executor. Store.Record is a buffered channel send + a
+		// single actor round-trip; typical latency is microseconds.
+		recordLocalUsage(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode)
+		forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
+	}()
 }
 
 // forwardUsageToCPAMP POSTs one NDJSON line to CPAMP usage/import.

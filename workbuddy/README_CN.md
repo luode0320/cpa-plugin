@@ -23,6 +23,12 @@
 - **Trial 领取** — Global 账号可在面板领取一次性 250 积分专家加油包。
 - **积分面板** — 内嵌面板 `/v0/resource/plugins/workbuddy/panel`，含积分
   进度条、套餐徽章、耗尽/禁用标记、CN/Global 筛选、凭证导入。
+- **Token 用量统计** — 合并社区插件 `cap-token-usage-tracker`：每条请求的
+  token 消耗（输入/输出/推理/缓存）由执行链路直接写入本地 bbolt 库
+  （不依赖宿主 `UsagePlugin` 广播——插件 executor 不会触发广播，这正是
+  独立 token 插件检测不到消耗的根因），并在独立页面
+  `/v0/resource/plugins/workbuddy/usage`（菜单 "Token 用量"）展示趋势、
+  按模型/账号统计、请求明细与成本估算。
 - **调度器**（可选） — `scheduler_mode` 默认 **`session`**：按会话轮询多账户
   （同一会话 1 小时内固定同一账号，不同会话分散到不同账号）；`credits`
   选中面板账号；`off` 完全交给 CPA 内置调度。
@@ -113,6 +119,18 @@ plugins:
       # 写端点要求该 Bearer token。空（默认）则只靠宿主 management middleware。
       # 也可从 WB_MANAGEMENT_KEY 环境变量读。
       management_key: ""
+
+      # 本地 Token 用量统计（默认开启）。统计失败只会禁用统计，
+      # 不影响 chat 与 CPAMP 上报。
+      usage_stats_enabled: true
+      # 可选数据库路径（默认 <CLIProxyAPI root>/data/usage-stats.db）。
+      usage_stats_path: ""
+      # 保留天数（1-3650，默认 365）。
+      usage_retention_days: 365
+      # 异步落盘间隔（1s-1h，默认 5s）。
+      usage_flush_interval: "5s"
+      # 缓冲记录数超过该值强制落盘（1-1000000，默认 100）。
+      usage_flush_max_records: 100
 ```
 
 模型 alias 和排除走 CPA 原生 `oauth-model-alias` 和 `oauth-excluded-models`

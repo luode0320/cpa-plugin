@@ -14,6 +14,7 @@ driven via the `pluginabi` RPC interface.
 | `Scheduler` | `scheduler.go`, `active_auth.go` | Optional panel-selected account routing (`scheduler_mode: credits`) |
 | `ManagementAPI` | `management.go`, `panel.go`, `checkin.go`, `credits_handler.go`, `billing.go`, `usage_config.go`, `host_auth.go` | Dashboard, manual check-in, credits query, import credential, config |
 | `UsagePlugin` | `usage.go` | Forward every request's usage record to CPAMP |
+| `Local usage stats` | `usage_stats/` (subpackage, merged from cap-token-usage-tracker), `usage_stats_bridge.go` | Per-request token usage persisted to local bbolt from the executor chain (`publishUsage`), dashboard page + read/write API under `/usage` |
 
 ## File map (by responsibility)
 
@@ -157,8 +158,16 @@ panel.html → /v0/management/plugins/workbuddy/accounts
 - **Usage**: `usage.handle` RPC — host calls `UsagePlugin.HandleUsage`
   after every request with a canonical `pluginapi.UsageRecord`.
 - **Management**: `management.register` returns routes under
-  `/v0/management/plugins/workbuddy/*` and a panel resource under
-  `/v0/resource/plugins/workbuddy/panel`.
+  `/v0/management/plugins/workbuddy/*` and panel resources under
+  `/v0/resource/plugins/workbuddy/panel` (credits) and
+  `/v0/resource/plugins/workbuddy/usage` (token usage statistics).
+- **Local usage stats**: the merged tracker stack records each request inside
+  `publishUsage` (`usage.go`) into a local bbolt DB via `usage_stats.Store`
+  (actor channel, async flush — never blocks the executor). The dashboard
+  page reads through the resource route (`/stats`, `/requests`, `/costs`,
+  `/prices`, `/preferences`, `/exchange-rate`); write endpoints (`/prices`,
+  `/reset`, `/backup`, `/restore`) are mounted on the management route and
+  pass the same `management_key` gate.
 - **Scheduler**: `scheduler.pick` RPC — plugin returns `Handled: true` with
   an `AuthID` only when `scheduler_mode: credits` and a valid candidate
   exists; otherwise defers.

@@ -142,6 +142,11 @@ func configure(raw []byte) {
 
 	resolveUsageReport(cfgURL, cfgKey)
 	ensureScheduler()
+
+	// Local token-usage statistics (merged cap-token-usage-tracker). Parses
+	// usage_stats_* fields from the same config_yaml. Non-fatal by design:
+	// a failure only disables local statistics, never chat.
+	configureUsageStats(raw)
 }
 
 // resolveUsageReport fills usageReportURL/key from config → env → secret files.
