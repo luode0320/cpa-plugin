@@ -6,4 +6,5 @@ dist/
 # Go
 *.test
 *.out
-workbuddy/workbuddy-plus
+.workbuddy/*
+.test*

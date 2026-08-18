@@ -24,7 +24,8 @@
 - **积分面板** — 内嵌面板 `/v0/resource/plugins/workbuddy/panel`，含积分
   进度条、套餐徽章、耗尽/禁用标记、CN/Global 筛选、凭证导入。
 - **调度器**（可选） — `scheduler_mode: credits` 让插件选中面板选中的账号；
-  `off`（默认）完全交给 CPA 内置调度。
+  `session` 按会话轮询多账户（同一会话 1 小时内固定同一账号，不同会话分散
+  到不同账号）；`off`（默认）完全交给 CPA 内置调度。
 - **Usage 上报** — 实现 `UsagePlugin` 能力，每条请求的 usage record 转发到
   可配置的 CPAMP 端点。未配置 URL+key 时不上报。
 
@@ -98,6 +99,8 @@ plugins:
       # 调度行为（默认 "off"）：
       #   off     → 完全交给 CPA 内置调度
       #   credits → 插件选中面板选中的账号（耗尽/禁用时回退）
+      #   session → 按会话轮询：同一会话 1 小时内固定同一账号，不同会话分散
+      #             到不同账号；无会话标识的请求回落面板选中账号
       scheduler_mode: "off"
 
       # CPAMP usage 上报。URL+key 都设置才会上报。

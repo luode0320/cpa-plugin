@@ -85,6 +85,8 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					if v == schedulerModeCredits {
 						nextSchedulerMode = schedulerModeCredits
+					} else if v == schedulerModeSession {
+						nextSchedulerMode = schedulerModeSession
 					}
 				}
 				if strings.HasPrefix(line, "usage_report_url:") {

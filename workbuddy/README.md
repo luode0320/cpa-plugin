@@ -32,8 +32,9 @@ dashboard.
   with credits progress bars, plan badges, exhausted/disabled flags, region
   filter, and credential import.
 - **Scheduler** (optional) — `scheduler_mode: credits` makes the plugin pick
-  the panel-selected account; `off` (default) defers to CPA's built-in
-  scheduler entirely.
+  the panel-selected account; `session` spreads conversations across accounts
+  (same conversation stays on one account for up to 1h); `off` (default)
+  defers to CPA's built-in scheduler entirely.
 - **Usage forwarding** — implements `UsagePlugin`; every request's usage
   record is forwarded to a configurable CPAMP endpoint. No record is sent
   unless a URL+key are configured.
@@ -113,6 +114,10 @@ plugins:
       #   off     → defer to CPA's built-in scheduler entirely
       #   credits → plugin picks the panel-selected account (with fallback
       #             when that account is exhausted / disabled)
+      #   session → per-conversation round-robin: same conversation stays on
+      #             one account for up to 1h; conversations spread across
+      #             accounts; requests without a session identity fall back
+      #             to the panel-selected account
       scheduler_mode: "off"
 
       # CPAMP usage forwarding. Both must be set for any record to be sent.

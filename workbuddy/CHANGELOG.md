@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.8.6 (unreleased)
+
+### Feature — per-conversation account routing (`scheduler_mode: session`)
+
+多账户会话级轮询:同一会话 1 小时内粘性绑定同一账户,不同会话轮询分配
+不同账户,避免所有流量压在一个面板选中账户上。
+
+- `session_auth.go` (new) — 会话粘性路由核心:
+  - `sessionKey → {AuthID, ExpiresAt}` 映射,默认 1h TTL,`RWMutex` 保护,
+    后台 janitor 每 5 分钟清理过期绑定;
+  - 会话键提取优先级(仅用 scheduler.pick 请求 Options 中宿主可见信号):
+    `execution_session_id`(显式执行会话) > 客户端会话头
+    (`X-Claude-Code-Session-Id` / `Session-Id` / `Session_id` /
+    `X-Session-ID` / `X-Session-Affinity` / `X-Client-Request-Id`) >
+    `derived_session_id`(宿主从会话根派生的稳定哈希);
+  - 分配策略:未绑定账户优先 → 全绑定后轮询取模;绑定过期或账户被
+    禁用/耗尽时自动重分配;所有账户不可用时保留现有 pin;
+  - 无会话标识的请求回落面板选中账户(与 `credits` 模式行为一致)。
+- `scheduler.go` — `handleSchedulerPick` 支持 `schedulerModeSession` 分支;
+  新增 `schedulerModeSession = "session"` 常量。
+- `usage_config.go` — `configure()` 解析 `scheduler_mode: session`。
+- `main.go` — `scheduler_mode` ConfigField 枚举增加 `session` 并更新说明。
+- `panel.go` — `/accounts` 响应新增 `scheduler_mode` 字段(面板可感知当前
+  路由模式)。
+- `session_auth_test.go` (new) — 12 个用例:会话键提取优先级、同会话粘性、
+  异会话均匀分配、TTL 过期释放复用、账户耗尽重分配、无会话回落面板、
+  全耗尽保 pin、完整 `handleSchedulerPick` 链路。
+
 ## 0.8.2
 
 ### Concurrency + lifecycle hardening

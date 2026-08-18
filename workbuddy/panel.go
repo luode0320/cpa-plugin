@@ -183,6 +183,7 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 	resp := map[string]any{
 		"accounts":       out,
 		"active_auth":    activeID,
+		"scheduler_mode": loadedSchedulerMode(),
 		"checkin_auto":   auto,
 		"lifecycle_auto": lifecycleEnabled(),
 		"schedule":       []string{"09:00", "21:00"},
