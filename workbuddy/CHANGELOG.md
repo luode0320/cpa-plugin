@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.8.6 (unreleased)
+## 0.8.6
 
 ### Feature — per-conversation account routing (`scheduler_mode: session`)
 
