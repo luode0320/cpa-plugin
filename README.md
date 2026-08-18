@@ -56,7 +56,7 @@ plugins:
 CPA 插件商店源添加：
 
 ```text
-https://raw.githubusercontent.com/Sliverkiss/cpa-plugin/main/registry.json
+https://raw.githubusercontent.com/luode0320/cpa-plugin/main/registry.json
 ```
 
 然后在商店 UI 安装/更新 **workbuddy** 和 **qoderwork**。
