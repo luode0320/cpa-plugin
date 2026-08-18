@@ -238,6 +238,36 @@ func TestPickSessionAuth_EmptyCandidates(t *testing.T) {
 	}
 }
 
+// TestSchedulerPick_DefaultModeIsSession covers v0.8.7: session is the
+// built-in default — handleSchedulerPick handles routing without any explicit
+// scheduler_mode configuration (previously the default was off → deferred).
+func TestSchedulerPick_DefaultModeIsSession(t *testing.T) {
+	resetSessionRouting(t)
+	restoreMode := setSchedulerMode(schedulerModeSession)
+	t.Cleanup(func() {
+		setActiveAuthID("")
+		restoreMode()
+	})
+
+	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
+		Provider: providerName,
+		Options: pluginapi.SchedulerOptions{
+			Metadata: map[string]any{derivedSessionIDMetadataKey: "ctx:v1:conv-root"},
+		},
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: "wb-a", Provider: providerName},
+			{ID: "wb-b", Provider: providerName},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	resp := parsePickResponse(t, raw)
+	if !resp.Handled || resp.AuthID == "" {
+		t.Fatalf("default mode should handle session routing, got %+v", resp)
+	}
+}
+
 // TestSchedulerPick_SessionMode_RoutesByConversation exercises the full
 // handleSchedulerPick path with scheduler_mode=session.
 func TestSchedulerPick_SessionMode_RoutesByConversation(t *testing.T) {

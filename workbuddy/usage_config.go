@@ -59,7 +59,11 @@ func configure(raw []byte) {
 	// Parse config without holding any lock (fixes nested-lock hazard).
 	nextCheckinAuto := true
 	nextLifecycleAuto := true
-	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
+	// scheduler default: session (per-conversation round-robin). Explicit
+	// scheduler_mode in config_yaml overrides it; unknown values fall back to
+	// this default (NOT off) so multi-account deployments get spread routing
+	// out of the box.
+	nextSchedulerMode := schedulerModeSession
 	nextKeepaliveAuto := true
 	nextMgmtKey := ""
 

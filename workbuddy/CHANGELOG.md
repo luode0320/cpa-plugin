@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.7
+
+### Change — `session` is now the default scheduler mode
+
+- `scheduler_mode` 默认值从 `off` 改为 `session`:多账户部署开箱即用按会话
+  轮询(同一会话 1h 粘性同一账户,不同会话分散)。单账户无感知。
+- `usage_config.go` — `configure()` 未配置 `scheduler_mode`(或值非法)时
+  回落到 `session`;`scheduler.go` 全局初值同步。
+- `main.go` — ConfigField 枚举顺序与描述更新(session 标注 DEFAULT)。
+- 行为变化提示:默认不再 defer 给 CPA 内置调度。若想完全交给内置调度,
+  需显式配置 `scheduler_mode: off`。
+
 ## 0.8.6
 
 ### Feature — per-conversation account routing (`scheduler_mode: session`)

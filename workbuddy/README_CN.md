@@ -23,9 +23,9 @@
 - **Trial 领取** — Global 账号可在面板领取一次性 250 积分专家加油包。
 - **积分面板** — 内嵌面板 `/v0/resource/plugins/workbuddy/panel`，含积分
   进度条、套餐徽章、耗尽/禁用标记、CN/Global 筛选、凭证导入。
-- **调度器**（可选） — `scheduler_mode: credits` 让插件选中面板选中的账号；
-  `session` 按会话轮询多账户（同一会话 1 小时内固定同一账号，不同会话分散
-  到不同账号）；`off`（默认）完全交给 CPA 内置调度。
+- **调度器**（可选） — `scheduler_mode` 默认 **`session`**：按会话轮询多账户
+  （同一会话 1 小时内固定同一账号，不同会话分散到不同账号）；`credits`
+  选中面板账号；`off` 完全交给 CPA 内置调度。
 - **Usage 上报** — 实现 `UsagePlugin` 能力，每条请求的 usage record 转发到
   可配置的 CPAMP 端点。未配置 URL+key 时不上报。
 
@@ -96,12 +96,12 @@ plugins:
       # 积分生命周期：CN 耗尽禁用 / Global 耗尽删除 / CN 回血恢复（默认 true）。
       lifecycle_auto: true
 
-      # 调度行为（默认 "off"）：
-      #   off     → 完全交给 CPA 内置调度
-      #   credits → 插件选中面板选中的账号（耗尽/禁用时回退）
+      # 调度行为（默认 "session"）：
       #   session → 按会话轮询：同一会话 1 小时内固定同一账号，不同会话分散
       #             到不同账号；无会话标识的请求回落面板选中账号
-      scheduler_mode: "off"
+      #   credits → 插件选中面板选中的账号（耗尽/禁用时回退）
+      #   off     → 完全交给 CPA 内置调度
+      scheduler_mode: "session"
 
       # CPAMP usage 上报。URL+key 都设置才会上报。
       # 未配置时 fallback 到 USAGE_REPORT_URL / USAGE_REPORT_KEY /
