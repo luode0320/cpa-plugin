@@ -1,7 +1,8 @@
-# Multi-arch CPA plugin build & release (workbuddy + qoderwork).
+# Multi-arch CPA plugin build & release (workbuddy + qoderwork + token-usage-tracker).
 # Each plugin versions INDEPENDENTLY:
 #   - tag 'workbuddy-v*'  → release workbuddy at that version
 #   - tag 'qoderwork-v*'  → release qoderwork at that version
+#   - tag 'token-usage-tracker-v*' → release token-usage-tracker at that version
 #   - workflow_dispatch   → pick plugin + version manually
 #   - plain push/PR       → CI builds for both (artifacts only, no release)
 #
@@ -14,14 +15,14 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["workbuddy-v*", "qoderwork-v*"]
+    tags: ["workbuddy-v*", "qoderwork-v*", "token-usage-tracker-v*"]
   workflow_dispatch:
     inputs:
       plugin:
         description: "Plugin to release"
         required: true
         type: choice
-        options: [workbuddy, qoderwork]
+        options: [workbuddy, qoderwork, token-usage-tracker]
       version:
         description: "Version without v (empty = plugin's VERSION file)"
         required: false
@@ -40,6 +41,7 @@ jobs:
         include:
           - dir: workbuddy
           - dir: qoderwork
+          - dir: token-usage-tracker
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
@@ -113,6 +115,32 @@ jobs:
             runner: macos-15
             ext: dylib
           - id: qoderwork
+            goos: windows
+            goarch: amd64
+            runner: windows-2025
+            ext: dll
+          # token-usage-tracker native
+          - id: token-usage-tracker
+            goos: linux
+            goarch: amd64
+            runner: ubuntu-24.04
+            ext: so
+          - id: token-usage-tracker
+            goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
+            ext: so
+          - id: token-usage-tracker
+            goos: darwin
+            goarch: amd64
+            runner: macos-15-intel
+            ext: dylib
+          - id: token-usage-tracker
+            goos: darwin
+            goarch: arm64
+            runner: macos-15
+            ext: dylib
+          - id: token-usage-tracker
             goos: windows
             goarch: amd64
             runner: windows-2025
@@ -210,6 +238,12 @@ jobs:
           - id: qoderwork
             target: freebsd-amd64
             ext: so
+          - id: token-usage-tracker
+            target: windows-arm64
+            ext: dll
+          - id: token-usage-tracker
+            target: freebsd-amd64
+            ext: so
     defaults:
       run:
         shell: bash
@@ -288,7 +322,8 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
       startsWith(github.ref, 'refs/tags/workbuddy-v') ||
-      startsWith(github.ref, 'refs/tags/qoderwork-v')
+      startsWith(github.ref, 'refs/tags/qoderwork-v') ||
+      startsWith(github.ref, 'refs/tags/token-usage-tracker-v')
     needs:
       - build
       - build-cross
@@ -307,8 +342,10 @@ jobs:
             V="${{ github.event.inputs.version }}"
           elif [[ "${GITHUB_REF_NAME}" == workbuddy-v* ]]; then
             P="workbuddy"; V="${GITHUB_REF_NAME#workbuddy-v}"
-          else
+          elif [[ "${GITHUB_REF_NAME}" == qoderwork-v* ]]; then
             P="qoderwork"; V="${GITHUB_REF_NAME#qoderwork-v}"
+          else
+            P="token-usage-tracker"; V="${GITHUB_REF_NAME#token-usage-tracker-v}"
           fi
           echo "plugin=$P" >> "$GITHUB_OUTPUT"
           echo "version=$V" >> "$GITHUB_OUTPUT"
