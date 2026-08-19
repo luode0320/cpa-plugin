@@ -126,6 +126,18 @@ def shim_main(path: Path) -> None:
                 f"{path}: cgo preamble is missing {required!r} — the real "
                 f"cgo build will fail with 'could not determine what C.* refers to'"
             )
+    # -buildmode=c-shared requires a main function in the package; the shim
+    # appends a dummy main() for the default build mode and would mask its
+    # absence (real failure: "function main is undeclared in the main
+    # package" — hit on the token-usage-tracker CI build).
+    if not any(
+        "\nfunc main(" in f.read_text(encoding="utf-8")
+        for f in path.parent.glob("*.go")
+    ):
+        raise SystemExit(
+            f"{path}: no func main() in the package — -buildmode=c-shared "
+            f"will fail with 'function main is undeclared in the main package'"
+        )
     new, count = PREAMBLE_RE.subn(r"\1\n", src, count=1)
     if count != 1:
         raise SystemExit(f"{path}: could not strip cgo preamble (pattern mismatch)")

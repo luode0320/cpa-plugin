@@ -123,6 +123,10 @@ func cliproxyPluginShutdown() {
 	// ticker hold no resources that outlive the process.
 }
 
+// main is required by -buildmode=c-shared (same no-op as the sibling
+// plugins); the entry points are cliproxy_plugin_init / cliproxyPluginCall.
+func main() {}
+
 // -----------------------------------------------------------------------------
 // Registration
 // -----------------------------------------------------------------------------
