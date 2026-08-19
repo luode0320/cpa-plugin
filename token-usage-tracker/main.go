@@ -48,6 +48,10 @@ typedef struct {
 	cliproxy_plugin_free_fn free_buffer;
 	cliproxy_plugin_shutdown_fn shutdown;
 } cliproxy_plugin_api;
+
+extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+extern void cliproxyPluginFree(void*, size_t);
+extern void cliproxyPluginShutdown(void);
 */
 import "C"
 

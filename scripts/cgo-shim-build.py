@@ -73,10 +73,6 @@ func cgoCBytes([]byte) unsafe.Pointer      { return nil }
 func cgoFree(unsafe.Pointer)               {}
 func cgoCallHost(*cliproxy_host_api, *int8, *uint8, uintptr, *cliproxy_buffer) int32 { return 0 }
 func cgoFreeHostBuffer(*cliproxy_host_api, unsafe.Pointer, uintptr)                  {}
-
-// Plugins build with -buildmode=c-shared (no main); the default build mode
-// used by the shim requires one for type-check/test.
-func main() {}
 '''
 
 # Ordered longest-first so typed names replace before generic ones.
@@ -112,6 +108,24 @@ PREAMBLE_RE = re.compile(r'(?s)^((?://[^\n]*\n)*package main\s*\n)\s*/\*.*?\*/\s
 
 def shim_main(path: Path) -> None:
     src = path.read_text(encoding="utf-8")
+    preamble = PREAMBLE_RE.match(src)
+    if preamble is None:
+        raise SystemExit(f"{path}: could not strip cgo preamble (pattern mismatch)")
+    # Sanity-check the standard cliproxy ABI extern declarations: cgo resolves
+    # C.cliproxyPluginCall etc. against these, and a missing extern only fails
+    # in a REAL cgo build (never under the shim, which strips the preamble).
+    # Verified in production: the token-usage-tracker CI build failed exactly
+    # this way ("could not determine what C.cliproxyPluginCall refers to").
+    for required in (
+        "extern int cliproxyPluginCall(",
+        "extern void cliproxyPluginFree(",
+        "extern void cliproxyPluginShutdown(",
+    ):
+        if required not in preamble.group(0):
+            raise SystemExit(
+                f"{path}: cgo preamble is missing {required!r} — the real "
+                f"cgo build will fail with 'could not determine what C.* refers to'"
+            )
     new, count = PREAMBLE_RE.subn(r"\1\n", src, count=1)
     if count != 1:
         raise SystemExit(f"{path}: could not strip cgo preamble (pattern mismatch)")
@@ -120,6 +134,11 @@ def shim_main(path: Path) -> None:
     # Append the shim declarations AFTER the import block (Go requires all
     # imports before any declaration).
     new = new.rstrip() + "\n\n" + SHIM_BLOCK + "\n"
+    # Plugins build with -buildmode=c-shared (no main); the default build mode
+    # used by the shim requires one for type-check/test. Some plugins already
+    # declare a no-op main() — don't duplicate it.
+    if "\nfunc main(" not in new:
+        new += "func main() {}\n"
     if '"unsafe"' not in new:
         # Add "unsafe" to the first import block so shim types compile.
         if 'import (\n' in new:
