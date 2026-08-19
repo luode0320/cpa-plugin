@@ -78,11 +78,15 @@ func publishUsage(requestedModel, upstreamModel, authID string, started time.Tim
 	// round-trip. handleUsage (the host-driven path) is synchronous because the
 	// host already runs it on its own goroutine after the request completes.
 	go func() {
-		// Local statistics (merged token tracker): record the same detail into
-		// bbolt. Runs inside the goroutine so a saturated actor channel never
-		// stalls the executor. Store.Record is a buffered channel send + a
-		// single actor round-trip; typical latency is microseconds.
-		recordLocalUsage(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode)
+		// Shared usage feed (token-usage-tracker plugin): append the same
+		// detail as one NDJSON line to <root>/data/token-usage-feed.ndjson.
+		// The standalone token-usage-tracker plugin tails this file into its
+		// own bbolt database and serves the dashboard — this is the only
+		// cross-plugin data path (host UsagePlugin broadcast never fires for
+		// plugin executors, and bbolt's exclusive flock forbids two long-lived
+		// processes sharing one DB file). Runs inside the goroutine so a slow
+		// filesystem never stalls the executor.
+		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode)
 		forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
 	}()
 }

@@ -31,13 +31,17 @@ dashboard.
 - **Dashboard** — embedded panel at `/v0/resource/plugins/workbuddy/panel`
   with credits progress bars, plan badges, exhausted/disabled flags, region
   filter, and credential import.
-- **Token usage statistics** — merged from the community
-  `cap-token-usage-tracker`: every request's token consumption (input / output
-  / reasoning / cache) is recorded locally into a bbolt database directly from
-  the executor chain (no dependency on the host's `UsagePlugin` broadcast) and
-  shown on a dedicated page at `/v0/resource/plugins/workbuddy/usage`
-  (menu "Token 用量") with trends, per-model/account breakdowns, request
-  history and cost estimates.
+- **Token usage feed** — every request's token consumption (input / output
+  / reasoning / cache) is appended as one NDJSON line to a shared feed at
+  `<CLIProxyAPI root>/data/token-usage-feed.ndjson`. The standalone companion
+  plugin `token-usage-tracker` (install from the same registry) tails that
+  feed into its own database and serves the dashboard (menu "Token 用量",
+  `/v0/resource/plugins/token-usage-tracker/usage`) with trends,
+  per-model/account breakdowns, request history and cost estimates. This is
+  the replacement for the v0.8.8 in-plugin statistics, which was reverted:
+  the host's `UsagePlugin` broadcast never fires for plugin executors and two
+  long-lived processes cannot share one bbolt file, so a file feed is the
+  only clean cross-plugin data path.
 - **Scheduler** (optional) — `scheduler_mode` defaults to `session`: conversations
   spread across accounts (same conversation stays on one account for up to 1h).
   `credits` pins to the panel-selected account; `off` defers to CPA's built-in
@@ -139,13 +143,13 @@ plugins:
       # guard. Also readable from WB_MANAGEMENT_KEY env var.
       management_key: ""
 
-      # Local token usage statistics (default enabled). Failures only disable
-      # statistics; chat and CPAMP forwarding are unaffected.
-      usage_stats_enabled: true
-      # Optional database path (default <CLIProxyAPI root>/data/usage-stats.db).
-      usage_stats_path: ""
-      # Retention in days (1-3650, default 365).
-      usage_retention_days: 365
+      # Shared token-usage feed for the token-usage-tracker plugin
+      # (default enabled). Failures only disable the feed; chat and CPAMP
+      # forwarding are unaffected.
+      usage_feed_enabled: true
+      # Optional feed path (default <CLIProxyAPI root>/data/token-usage-feed.ndjson).
+      # Must match token-usage-tracker's usage_feed_path when both are set.
+      usage_feed_path: ""
       # Async flush interval (1s-1h, default 5s).
       usage_flush_interval: "5s"
       # Max records buffered before forcing a flush (1-1000000, default 100).

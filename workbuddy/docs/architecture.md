@@ -14,7 +14,7 @@ driven via the `pluginabi` RPC interface.
 | `Scheduler` | `scheduler.go`, `active_auth.go` | Optional panel-selected account routing (`scheduler_mode: credits`) |
 | `ManagementAPI` | `management.go`, `panel.go`, `checkin.go`, `credits_handler.go`, `billing.go`, `usage_config.go`, `host_auth.go` | Dashboard, manual check-in, credits query, import credential, config |
 | `UsagePlugin` | `usage.go` | Forward every request's usage record to CPAMP |
-| `Local usage stats` | `usage_stats/` (subpackage, merged from cap-token-usage-tracker), `usage_stats_bridge.go` | Per-request token usage persisted to local bbolt from the executor chain (`publishUsage`), dashboard page + read/write API under `/usage` |
+| `Usage feed` | `usage_feed.go` | Append every request's usage as NDJSON to the shared feed consumed by the standalone `token-usage-tracker` plugin (replaced the v0.8.8 in-plugin stats, which were reverted) |
 
 ## File map (by responsibility)
 
@@ -159,15 +159,15 @@ panel.html → /v0/management/plugins/workbuddy/accounts
   after every request with a canonical `pluginapi.UsageRecord`.
 - **Management**: `management.register` returns routes under
   `/v0/management/plugins/workbuddy/*` and panel resources under
-  `/v0/resource/plugins/workbuddy/panel` (credits) and
-  `/v0/resource/plugins/workbuddy/usage` (token usage statistics).
-- **Local usage stats**: the merged tracker stack records each request inside
-  `publishUsage` (`usage.go`) into a local bbolt DB via `usage_stats.Store`
-  (actor channel, async flush — never blocks the executor). The dashboard
-  page reads through the resource route (`/stats`, `/requests`, `/costs`,
-  `/prices`, `/preferences`, `/exchange-rate`); write endpoints (`/prices`,
-  `/reset`, `/backup`, `/restore`) are mounted on the management route and
-  pass the same `management_key` gate.
+  `/v0/resource/plugins/workbuddy/panel` (credits).
+- **Usage feed**: the standalone `token-usage-tracker` plugin is the sole
+  consumer of every request's usage. `publishUsage` (`usage.go`) appends one
+  NDJSON line per request to `<CLIProxyAPI root>/data/token-usage-feed.ndjson`
+  (`usage_feed.go`, O_APPEND open-per-line, 128MB rotation guard). The tracker
+  plugin tails that feed into its own bbolt store and serves the dashboard.
+  Rationale: the host's `UsagePlugin` broadcast never fires for plugin
+  executors, and bbolt's exclusive flock forbids two long-lived processes
+  sharing one DB file.
 - **Scheduler**: `scheduler.pick` RPC — plugin returns `Handled: true` with
   an `AuthID` only when `scheduler_mode: credits` and a valid candidate
   exists; otherwise defers.

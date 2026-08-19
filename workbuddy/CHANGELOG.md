@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.9
+
+### Change — 本地用量统计拆分为独立插件 token-usage-tracker(v0.1.0)
+
+v0.8.8 把社区插件 `cap-token-usage-tracker` 合并进 workbuddy 的方向被撤回:
+用量统计与 dashboard 由本项目**第三个插件** `token-usage-tracker` 独立提供
+(与 workbuddy、qoderwork 并列),workbuddy 只负责产出数据。
+
+- **移除**:`usage_stats/` 子包、`usage_stats_bridge.go`、`/usage` 页面与
+  全部统计路由、`usage_stats_*` 配置项。`/v0/resource/plugins/workbuddy/*`
+  只剩积分面板 `/panel`,此前的 dashboard API 404 不再出现。
+- **新增共享 usage feed**(workbuddy → token-usage-tracker 的唯一数据通道):
+  `publishUsage` 在转发 CPAMP 的同时,把每次请求的 `usage.Detail` 以
+  NDJSON 追加写至 `<CLIProxyAPI root>/data/token-usage-feed.ndjson`(默认),
+  打开即写即关(O_APPEND),超过 128MB 自动截断轮转。之所以不用共享 bbolt
+  库:两个长驻进程无法同时持有 bbolt 排它文件锁。
+- **新配置项**(`config_yaml`,均可选):
+  - `usage_feed_enabled`(boolean,默认 true)
+  - `usage_feed_path`(string,默认 `<CLIProxyAPI root>/data/token-usage-feed.ndjson`;需与 token-usage-tracker 的 `usage_feed_path` 一致)
+- **配套插件**:安装 `token-usage-tracker` v0.1.0 后,在插件商店打开其
+  dashboard("Token 用量" 菜单,`/v0/resource/plugins/token-usage-tracker/usage`)
+  即可看到 workbuddy 账户的实时 token 消耗(轮询间隔默认 5s)。
+
 ## 0.8.8
 
 ### Feature — 本地 Token 用量统计(合并 cap-token-usage-tracker)

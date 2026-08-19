@@ -156,7 +156,6 @@ func managementRegistration() managementRegistrationResponse {
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "WorkBuddy", Description: "WorkBuddy dashboard: credits, check-in, plan, import."},
-			{Path: "/usage", Menu: "Token 用量", Description: "Token usage statistics (merged cap-token-usage-tracker): per-model/account consumption, trends, requests."},
 		},
 	}
 }
@@ -172,19 +171,13 @@ func handleManagement(raw []byte) ([]byte, error) {
 	resPrefix := "/v0/resource/plugins/" + providerName
 	if req.Method == http.MethodGet && strings.HasPrefix(path, resPrefix) {
 		sub := strings.TrimPrefix(path, resPrefix)
-		// Token usage dashboard page + read-only statistics API (merged
-		// cap-token-usage-tracker). Falls through to the credits panel when
-		// the path does not belong to the statistics dashboard.
-		if resp, ok := handleUsageStatsResource(sub, req.Query); ok {
-			return okEnvelope(resp)
-		}
 		return okEnvelope(mgmtHTMLResponse(servePanel(sub)))
 	}
 
 	// Plugin-layer auth + rate limit for mutating endpoints (v0.6.31).
 	// Only enforced when management_key is configured; otherwise host middleware
 	// is the sole guard (historical default).
-	if req.Method == http.MethodPost || mutatingManagementPath(path) || usageStatsManagementAuthRequired(req) {
+	if req.Method == http.MethodPost || mutatingManagementPath(path) {
 		ip := managementClientIP(req)
 		if !allowManagementRequest(ip) {
 			return okEnvelope(mgmtJSONResponse(http.StatusTooManyRequests, map[string]any{
@@ -197,12 +190,6 @@ func handleManagement(raw []byte) ([]byte, error) {
 	}
 
 	base := loadedManagementBasePath() + "/plugins/" + providerName
-
-	// Token usage statistics write API (merged cap-token-usage-tracker).
-	// Runs after the auth/rate-limit gate above; only claims its own paths.
-	if resp, ok := handleUsageStatsManagement(req.Method, path, req); ok {
-		return okEnvelope(resp)
-	}
 
 	switch {
 	case req.Method == http.MethodGet && path == base+"/accounts":
