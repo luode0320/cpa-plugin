@@ -19,6 +19,7 @@ const usageFeedSourceServiceAddress = "https://www.codebuddy.cn"
 //	{"timestamp":"...","latency_ms":123,"source":"workbuddy","auth_index":"...",
 //	 "provider":"workbuddy","model":"...","alias":"...","auth_type":"oauth",
 //	 "executor_type":"workbuddy","failed":false,"status_code":200,
+//	 "service_tier":"","reasoning_effort":"high","ttft_ns":850000000,
 //	 "tokens":{"input_tokens":..,"output_tokens":..,"reasoning_tokens":..,
 //	           "cached_tokens":..,"cache_read_tokens":..,
 //	           "cache_creation_tokens":..,"total_tokens":..}}
@@ -35,18 +36,21 @@ func (s *Store) RecordFeedNDJSON(line string) error {
 
 func decodeFeedLine(line string) (normalizedUsage, error) {
 	var raw struct {
-		Timestamp    string `json:"timestamp"`
-		LatencyMS    int64  `json:"latency_ms"`
-		Source       string `json:"source"`
-		AuthIndex    string `json:"auth_index"`
-		Provider     string `json:"provider"`
-		Model        string `json:"model"`
-		Alias        string `json:"alias"`
-		AuthType     string `json:"auth_type"`
-		ExecutorType string `json:"executor_type"`
-		Failed       bool   `json:"failed"`
-		StatusCode   int    `json:"status_code"`
-		Tokens       struct {
+		Timestamp        string `json:"timestamp"`
+		LatencyMS        int64  `json:"latency_ms"`
+		Source           string `json:"source"`
+		AuthIndex        string `json:"auth_index"`
+		Provider         string `json:"provider"`
+		Model            string `json:"model"`
+		Alias            string `json:"alias"`
+		AuthType         string `json:"auth_type"`
+		ExecutorType     string `json:"executor_type"`
+		Failed           bool   `json:"failed"`
+		StatusCode       int    `json:"status_code"`
+		ServiceTier      string `json:"service_tier"`
+		ReasoningEffort  string `json:"reasoning_effort"`
+		TTFTNS           int64  `json:"ttft_ns"`
+		Tokens           struct {
 			InputTokens         int64 `json:"input_tokens"`
 			OutputTokens        int64 `json:"output_tokens"`
 			ReasoningTokens     int64 `json:"reasoning_tokens"`
@@ -89,10 +93,17 @@ func decodeFeedLine(line string) (normalizedUsage, error) {
 		t.CachedTokens, t.CacheReadTokens, t.CacheCreationTokens,
 		t.TotalTokens,
 	)
-	return NewUsage(
+	usage := NewUsage(
 		provider, executorType, strings.TrimSpace(raw.Model),
 		strings.TrimSpace(raw.Alias), source, authType,
 		strings.TrimSpace(raw.AuthIndex), requestedAt, latencyNS,
 		raw.Failed, raw.StatusCode, counters,
-	), nil
+	)
+	// Feed-only dimensions the producer populates: reasoning_effort (the value
+	// actually sent upstream) and ttft_ns (time-to-first-token). service_tier is
+	// reserved for future tiered pricing — the producer currently writes "".
+	usage.Dimensions.ServiceTier = normalizeDimension(strings.TrimSpace(raw.ServiceTier))
+	usage.Dimensions.ReasoningEffort = normalizeDimension(strings.TrimSpace(raw.ReasoningEffort))
+	usage.TTFTNS = positiveUint(raw.TTFTNS)
+	return usage, nil
 }
