@@ -65,7 +65,13 @@ func handleUsage(raw []byte) ([]byte, error) {
 // CPA builds) still emit usage; hosts with the wiring will trigger HandleUsage
 // separately, but forwardUsageToCPAMP is idempotent at the CPAMP ingestion
 // layer (NDJSON import dedups on timestamp+auth+model+total_tokens).
-func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody string) {
+//
+// reasoningEffort is the reasoning_effort value actually sent upstream (post
+// forceMaxThinking rewrite, "" when the client sent none). ttftNS is the
+// time-to-first-token in nanoseconds (0 when not observable). serviceTier
+// carries the account label (nickname preferred, UID fallback) surfaced in
+// the tracker dashboard's Tier column.
+func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody, reasoningEffort string, ttftNS uint64, serviceTier string) {
 	model := strings.TrimSpace(upstreamModel)
 	if model == "" {
 		model = strings.TrimSpace(requestedModel)
@@ -86,7 +92,7 @@ func publishUsage(requestedModel, upstreamModel, authID string, started time.Tim
 		// plugin executors, and bbolt's exclusive flock forbids two long-lived
 		// processes sharing one DB file). Runs inside the goroutine so a slow
 		// filesystem never stalls the executor.
-		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode)
+		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, reasoningEffort, ttftNS, serviceTier)
 		forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
 	}()
 }
@@ -233,12 +239,18 @@ func usageDetailFromCompletion(payload []byte) usage.Detail {
 }
 
 // sseUsageCollector scans upstream SSE chunks and keeps the last "usage"
-// object seen (CodeBuddy emits it on the terminal chunk).
+// object seen (CodeBuddy emits it on the terminal chunk). firstByteAt records
+// when the first upstream data chunk arrived so callers can compute the
+// time-to-first-token (TTFT) for the dashboard's ttft_ns column.
 type sseUsageCollector struct {
-	last map[string]any
+	last        map[string]any
+	firstByteAt time.Time
 }
 
 func (c *sseUsageCollector) feed(rawJSON string) {
+	if c.firstByteAt.IsZero() {
+		c.firstByteAt = time.Now()
+	}
 	var chunk map[string]any
 	if json.Unmarshal([]byte(rawJSON), &chunk) != nil {
 		return
@@ -250,4 +262,18 @@ func (c *sseUsageCollector) feed(rawJSON string) {
 
 func (c *sseUsageCollector) detail() usage.Detail {
 	return usageDetailFromMap(c.last)
+}
+
+// ttftNS returns the time-to-first-token in nanoseconds: the wall-clock gap
+// between the request start and the first upstream SSE data chunk. Returns 0
+// when no chunk was observed or the clock skew would make it negative.
+func (c *sseUsageCollector) ttftNS(started time.Time) uint64 {
+	if c.firstByteAt.IsZero() || started.IsZero() {
+		return 0
+	}
+	d := c.firstByteAt.Sub(started)
+	if d <= 0 {
+		return 0
+	}
+	return uint64(d)
 }

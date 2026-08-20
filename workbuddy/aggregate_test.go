@@ -7,7 +7,7 @@ import (
 
 func TestAggregateCompletion_BasicSSE(t *testing.T) {
 	sse := "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"1\",\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":10,\"total_tokens\":15}}\n\ndata: [DONE]\n\n"
-	out, err := aggregateCompletion(strings.NewReader(sse), "test-model")
+	out, err := aggregateCompletion(strings.NewReader(sse), "test-model", nil)
 	if err != nil {
 		t.Fatalf("aggregate: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestAggregateCompletion_BasicSSE(t *testing.T) {
 }
 
 func TestAggregateCompletion_Empty(t *testing.T) {
-	_, err := aggregateCompletion(strings.NewReader(""), "test")
+	_, err := aggregateCompletion(strings.NewReader(""), "test", nil)
 	if err != nil {
 		t.Fatalf("empty should not error: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestAggregateCompletion_Empty(t *testing.T) {
 
 func TestAggregateCompletion_NoDone(t *testing.T) {
 	sse := "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n"
-	out, _ := aggregateCompletion(strings.NewReader(sse), "m")
+	out, _ := aggregateCompletion(strings.NewReader(sse), "m", nil)
 	if !strings.Contains(string(out), "hi") {
 		t.Fatal("content missing")
 	}

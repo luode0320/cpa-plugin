@@ -134,8 +134,13 @@ func cliProxyRootFromDir(dir string) (string, bool) {
 // recordUsageFeed appends one NDJSON line for a completed request. Called from
 // publishUsage inside its async goroutine, so a slow filesystem never stalls
 // the executor. The record shape mirrors forwardUsageToCPAMP's payload so the
-// tracker plugin and CPAMP see identical data.
-func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int) {
+// tracker plugin and CPAMP see identical data. reasoningEffort is the
+// reasoning_effort actually sent upstream (post forceMaxThinking rewrite);
+// ttftNS is the time-to-first-token in nanoseconds (0 when not observable,
+// e.g. non-SSE paths or transport failures). serviceTier carries the account
+// label (nickname preferred, UID fallback) so the tracker dashboard's Tier
+// column shows which workbuddy account served each request.
+func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int, reasoningEffort string, ttftNS uint64, serviceTier string) {
 	usageFeedMu.RLock()
 	enabled := usageFeedEnabled
 	path := usageFeedPath
@@ -158,18 +163,21 @@ func recordUsageFeed(alias, model, authUID string, started time.Time, detail usa
 		total = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens
 	}
 	record := map[string]any{
-		"timestamp":     ts.UTC().Format(time.RFC3339Nano),
-		"latency_ms":    latencyMs,
-		"source":        "workbuddy",
-		"auth_index":    strings.TrimSpace(authUID),
-		"provider":      providerName,
-		"model":         model,
-		"alias":         alias,
-		"endpoint":      "POST /v1/chat/completions",
-		"auth_type":     "oauth",
-		"executor_type": "workbuddy",
-		"failed":        failed,
-		"status_code":   statusCode,
+		"timestamp":         ts.UTC().Format(time.RFC3339Nano),
+		"latency_ms":        latencyMs,
+		"source":            "workbuddy",
+		"auth_index":        strings.TrimSpace(authUID),
+		"provider":          providerName,
+		"model":             model,
+		"alias":             alias,
+		"endpoint":          "POST /v1/chat/completions",
+		"auth_type":         "oauth",
+		"executor_type":     "workbuddy",
+		"failed":            failed,
+		"status_code":       statusCode,
+		"service_tier":      strings.TrimSpace(serviceTier),
+		"reasoning_effort":  strings.TrimSpace(reasoningEffort),
+		"ttft_ns":           ttftNS,
 		"tokens": map[string]any{
 			"input_tokens":          detail.InputTokens,
 			"output_tokens":         detail.OutputTokens,

@@ -401,6 +401,22 @@ func sanitizeBlockedTemplates(s string) string {
 	return s
 }
 
+// reasoningEffortFromBody extracts the "reasoning_effort" string value from a
+// chat-completions body. Callers pass the REWRITTEN body (post
+// prepareUpstreamBody) so hy3-family models forced to "high" by
+// forceMaxThinking are reported as what was actually sent upstream. Returns ""
+// when the field is absent or not a string.
+func reasoningEffortFromBody(body []byte) string {
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return ""
+	}
+	if v, ok := obj["reasoning_effort"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
 // forceMaxThinking pins reasoning_effort to "high" for hy3-family models so
 // Tencent Hunyuan 3 always reasons at maximum depth. CodeBuddy only honors
 // "high" for deep thinking (medium/low/max/xhigh/ultra all fall back to no

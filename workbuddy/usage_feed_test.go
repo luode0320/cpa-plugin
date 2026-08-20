@@ -74,8 +74,8 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 		ReasoningTokens: 50,
 		TotalTokens:     350,
 	}
-	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started, detail, false, 200)
-	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started.Add(time.Second), detail, true, 502)
+	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started, detail, false, 200, "high", 850_000_000, "account-bob")
+	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started.Add(time.Second), detail, true, 502, "", 0, "account-alice")
 
 	raw, err := os.ReadFile(feedPath)
 	if err != nil {
@@ -86,13 +86,16 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 		t.Fatalf("got %d lines, want 2", len(lines))
 	}
 	var rec struct {
-		Timestamp string `json:"timestamp"`
-		Source    string `json:"source"`
-		AuthIndex string `json:"auth_index"`
-		Provider  string `json:"provider"`
-		Model     string `json:"model"`
-		Failed    bool   `json:"failed"`
-		Tokens    struct {
+		Timestamp        string `json:"timestamp"`
+		Source           string `json:"source"`
+		AuthIndex        string `json:"auth_index"`
+		Provider         string `json:"provider"`
+		Model            string `json:"model"`
+		Failed           bool   `json:"failed"`
+		ServiceTier      string `json:"service_tier"`
+		ReasoningEffort  string `json:"reasoning_effort"`
+		TTFTNS           int64  `json:"ttft_ns"`
+		Tokens           struct {
 			TotalTokens int64 `json:"total_tokens"`
 		} `json:"tokens"`
 	}
@@ -111,12 +114,30 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if rec.Failed {
 		t.Fatal("line 0 should be success")
 	}
+	if rec.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", rec.ReasoningEffort)
+	}
+	if rec.ServiceTier != "account-bob" {
+		t.Fatalf("service_tier = %q, want account-bob", rec.ServiceTier)
+	}
+	if rec.TTFTNS != 850_000_000 {
+		t.Fatalf("ttft_ns = %d, want 850000000", rec.TTFTNS)
+	}
 	// Line 2: failed request.
 	if err := json.Unmarshal([]byte(lines[1]), &rec); err != nil {
 		t.Fatalf("decode line 1: %v", err)
 	}
 	if !rec.Failed {
 		t.Fatal("line 1 should be failed")
+	}
+	if rec.ReasoningEffort != "" {
+		t.Fatalf("line 1 reasoning_effort = %q, want empty", rec.ReasoningEffort)
+	}
+	if rec.ServiceTier != "account-alice" {
+		t.Fatalf("line 1 service_tier = %q, want account-alice", rec.ServiceTier)
+	}
+	if rec.TTFTNS != 0 {
+		t.Fatalf("line 1 ttft_ns = %d, want 0", rec.TTFTNS)
 	}
 	// Timestamp format must be parseable RFC3339Nano (the tracker imports it).
 	if _, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err != nil {

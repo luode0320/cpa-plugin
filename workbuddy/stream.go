@@ -68,7 +68,7 @@ func streamHeaders() http.Header {
 // the outbound call and host transport policy applies. The host bridge emits
 // arbitrary 32KB chunks, so we adapt to io.Reader and keep the bufio.Scanner
 // SSE line framing unchanged.
-func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID string, started time.Time, authID string) {
+func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, streamID string, sseFramed bool, requestedModel, upstreamModel, authUID string, started time.Time, authID, reasoningEffort, serviceTier string) {
 	// Always close the host stream exactly once on every exit path.
 	closed := false
 	closeOnce := func() {
@@ -85,7 +85,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, serviceTier)
 		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
 		return
 	}
@@ -93,7 +93,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	if statusCode >= 400 {
 		// Drain the error body via the same bridge so the message is complete.
 		errPayload, _ := io.ReadAll(newHostStreamReader(stream))
-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload))
+		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload), reasoningEffort, 0, serviceTier)
 		if authUID != "" {
 			go reconcileByUID(authUID, statusCode, string(errPayload))
 		}
@@ -118,18 +118,18 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		}
 		if err := streamEmit(streamID, []byte(cleaned)); err != nil {
 			// Client disconnected / host closed stream — abort; do not report success.
-			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error())
+			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error(), reasoningEffort, collector.ttftNS(started), serviceTier)
 			return
 		}
 	}
 	// A mid-stream read failure means the client received a truncated stream:
 	// surface it as an error frame and record the attempt as failed.
 	if err := scanner.Err(); err != nil {
-		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error())
+		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error(), reasoningEffort, collector.ttftNS(started), serviceTier)
 		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
 		return
 	}
-	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), serviceTier)
 	invalidateAccountCredits(authID, authUID)
 }
 
@@ -277,7 +277,7 @@ func cleanChunkJSON(s string) string {
 	return string(out)
 }
 
-func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
+func aggregateCompletion(r io.Reader, model string, firstByteAt *time.Time) ([]byte, error) {
 	var content, reasoning, role, respModel, respID, finish string
 	var created int64
 	var usage map[string]any
@@ -299,6 +299,9 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 		var chunk map[string]any
 		if json.Unmarshal([]byte(data), &chunk) != nil {
 			continue
+		}
+		if firstByteAt != nil && firstByteAt.IsZero() {
+			*firstByteAt = time.Now()
 		}
 		if v, ok := chunk["id"].(string); ok && v != "" {
 			respID = v
