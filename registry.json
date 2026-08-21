@@ -149,7 +149,7 @@
       "id": "token-usage-tracker",
       "name": "token-usage-tracker",
       "description": "Token usage dashboard for workbuddy accounts (real consumption from the shared usage feed): per-model/account stats, trends, requests, costs. Third plugin of cpa-plugin.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": "luode (statistics core ported from AITNR/cap-token-usage-tracker)",
       "repository": "https://github.com/luode0320/cpa-plugin",
       "homepage": "https://github.com/luode0320/cpa-plugin",
@@ -159,51 +159,51 @@
           {
             "goos": "darwin",
             "goarch": "amd64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_darwin_amd64.zip",
-            "sha256": "4c1f1d9a9181481426c5e21e5315afa03877595ba189d6d4c18d98b828a807de",
-            "size": 3165802
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_darwin_amd64.zip",
+            "sha256": "d1aff6f2251aa4cb81c3bba62905b031fd162e962de9544b9e3ba4cc15de6d25",
+            "size": 3166880
           },
           {
             "goos": "darwin",
             "goarch": "arm64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_darwin_arm64.zip",
-            "sha256": "ddde4482ed692ed3797de2c349077b8246289faf58d08e2adda7bbd0eda865b8",
-            "size": 2938754
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_darwin_arm64.zip",
+            "sha256": "166daaa5c7aaf61316e79aa1bea255eb5000d6846d040ad2d4f2e7fe2def03bf",
+            "size": 2940577
           },
           {
             "goos": "freebsd",
             "goarch": "amd64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_freebsd_amd64.zip",
-            "sha256": "795c657a7d5753d003b85d1d6f301fb2bc3a75a9c70a3b4342657526ac7b76b4",
-            "size": 3247399
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_freebsd_amd64.zip",
+            "sha256": "8415c2c8dea5d756106b40b22e97490cfb8542111b25467977a7cda6a6aa8f20",
+            "size": 3249627
           },
           {
             "goos": "linux",
             "goarch": "amd64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_linux_amd64.zip",
-            "sha256": "e38e6fcceba256780a33869b1bb8302fef870cff92d55b1872200e8b30c01a6e",
-            "size": 3328709
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_linux_amd64.zip",
+            "sha256": "6ab8aa2d36266415acb8a2baed5130037e7e6d5b5a2ac62b21e6cc2d59446133",
+            "size": 3330889
           },
           {
             "goos": "linux",
             "goarch": "arm64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_linux_arm64.zip",
-            "sha256": "d8259df920c8fb0aa2840258b17d9243bf2fe080e9ffda1f4b830a5082c1da45",
-            "size": 3035799
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_linux_arm64.zip",
+            "sha256": "b9140313467c5d457dfa9a8561ef3d714029963f3f2bead40d0ade9da3cf2321",
+            "size": 3037838
           },
           {
             "goos": "windows",
             "goarch": "amd64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_windows_amd64.zip",
-            "sha256": "4db810a97ff77ef8340fbcd27901a95353b593157205d343ca53e2a4175fe58a",
-            "size": 3246847
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_windows_amd64.zip",
+            "sha256": "dd32f0b161f35359adcdb799a6798f8b46223f2b0adfdcd3f321c997b68c12c9",
+            "size": 3249147
           },
           {
             "goos": "windows",
             "goarch": "arm64",
-            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.3/token-usage-tracker_0.1.3_windows_arm64.zip",
-            "sha256": "d3073020b324743beb4fb41e2a327fc804abcad75fe0cf50ec72af07fa8e208c",
-            "size": 3004767
+            "url": "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets/token-usage-tracker-0.1.4/token-usage-tracker_0.1.4_windows_arm64.zip",
+            "sha256": "79557b1c9e10d64547bc9b3c718dead7e4206e0c25416593d478dd1acaacc258",
+            "size": 3006261
           }
         ]
       }
