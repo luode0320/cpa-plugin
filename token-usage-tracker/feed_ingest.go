@@ -158,6 +158,14 @@ func configure(raw []byte) {
 }
 
 // reopenStore opens (or re-opens) the bbolt store for the given config.
+//
+// When a new store replaces an old one, the old store is closed INSIDE the
+// storeMu critical section. Otherwise the feedImporterLoop may have already
+// captured the old reference under the read lock, return after we drop the
+// write lock, and discover the store closed mid-ingest. Closing inside the
+// critical section guarantees that any subsequent RLock sees usageStore
+// pointing at the new store, so old-store ingest calls quickly fail at the
+// Store.send() gate instead of panicking into the host's fusePlugin trap.
 func reopenStore(cfg trackerConfig) {
 	if !cfg.FeedEnabled {
 		storeMu.Lock()
@@ -178,6 +186,9 @@ func reopenStore(cfg trackerConfig) {
 	if err != nil {
 		trackerWarnf("storage disabled (open %s: %v)", cfg.DBPath, err)
 		storeMu.Lock()
+		if usageStore != nil {
+			_ = usageStore.Close()
+		}
 		usageStore = nil
 		storeMu.Unlock()
 		return
@@ -185,10 +196,10 @@ func reopenStore(cfg trackerConfig) {
 	storeMu.Lock()
 	old := usageStore
 	usageStore = next
-	storeMu.Unlock()
 	if old != nil && old != next {
 		_ = old.Close()
 	}
+	storeMu.Unlock()
 }
 
 func usageStatsOpen() bool {
@@ -206,15 +217,23 @@ func usageStatsOpen() bool {
 // workbuddy plugin-executor requests do NOT arrive here: the host UsagePlugin
 // broadcast never fires for plugin executors (that is why workbuddy appends
 // the shared NDJSON feed instead), so no cross-path dedup is needed.
+//
+// Important: we must NEVER return (nil, err) here. The host's RPC adapter
+// wraps any error reply in a panic recover that calls fusePlugin(id, ...) and
+// permanently disables this plugin's UsagePlugin — every subsequent
+// api-provider record would then be silently dropped. The store may be
+// transiently closed during a reopenStore swap; the right response is to
+// ack with recorded=false and let the host keep broadcasting.
 func handleUsage(raw []byte) ([]byte, error) {
 	storeMu.RLock()
 	store := usageStore
 	storeMu.RUnlock()
 	if store == nil {
-		return okEnvelope(map[string]any{"recorded": false})
+		return okEnvelope(map[string]any{"recorded": false, "reason": "store not initialized"})
 	}
 	if err := store.RecordUsageRecord(raw); err != nil {
-		return nil, err
+		trackerWarnf("usage.handle: record failed (non-fatal): %v", err)
+		return okEnvelope(map[string]any{"recorded": false, "reason": err.Error()})
 	}
 	return okEnvelope(map[string]any{"recorded": true})
 }
