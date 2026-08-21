@@ -227,7 +227,9 @@ func handleToggleAuth(req pluginapi.ManagementRequest) map[string]any {
 			return map[string]any{"ok": true, "idempotent": true, "auth_index": authIndex, "disabled": cur, "nickname": sa.Account.Nickname, "uid": sa.Account.UID}
 		}
 		if target {
-			if err := disableAuth(authIndex, f.ID, sa, cachedCredits(f.ID), "手动禁用"); err != nil {
+			// Manual disable: stamp manual_disable so lifecycle reconcile never
+			// auto-re-enables this account behind the user's back.
+			if err := disableAuth(authIndex, f.ID, sa, cachedCredits(f.ID), "手动禁用", map[string]any{"manual_disable": true}); err != nil {
 				return map[string]any{"error": err.Error(), "auth_index": authIndex}
 			}
 		} else {

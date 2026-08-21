@@ -68,7 +68,11 @@ func pruneLifecycleState() {
 }
 
 // disableAuth writes disabled:true for a CN (or fallback) account.
-func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string) error {
+// extra merges additional top-level keys into the auth file (the panel toggle
+// passes {"manual_disable":true}). An existing manual_disable marker is ALWAYS
+// carried forward, so an auto-disable (exhausted) of an already-manually-
+// disabled account never erases the user's choice.
+func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, reason string, extra map[string]any) error {
 	mu := checkinLockFor(authIndex)
 	mu.Lock()
 	defer mu.Unlock()
@@ -80,12 +84,22 @@ func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, r
 			note = note + " · " + reason
 		}
 	}
-	if lifecycleStateUnchanged(authID, true, note) {
-		return nil
-	}
 	// Prefer live physical file to preserve any extra fields if present.
 	phys, err := hostAuthGetPhysical(authIndex)
-	if err == nil && parseDisabledFromAuthJSON(phys.JSON) {
+	// Merge caller extras with any marker already on disk.
+	merged := map[string]any{}
+	for k, v := range extra {
+		merged[k] = v
+	}
+	if err == nil && manualDisableFromAuthJSON(phys.JSON) {
+		merged["manual_disable"] = true
+	}
+	// Skip the write only when state+note are unchanged AND nothing new to
+	// merge — a manual toggle must persist even inside the lifecycle TTL.
+	if len(merged) == 0 && lifecycleStateUnchanged(authID, true, note) {
+		return nil
+	}
+	if err == nil && parseDisabledFromAuthJSON(phys.JSON) && len(merged) == 0 {
 		// already disabled; still refresh note if needed
 		if lifecycleStateUnchanged(authID, true, note) {
 			return nil
@@ -97,7 +111,7 @@ func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, r
 	if phys != nil {
 		name, path, legacyPath = resolveAuthFileTarget(sa, phys)
 	}
-	raw, err := buildAuthFileJSON(sa, true, note, nil)
+	raw, err := buildAuthFileJSON(sa, true, note, merged)
 	if err != nil {
 		return err
 	}
@@ -170,7 +184,11 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	if path == "" {
 		// Last resort: disable instead of silent no-op (never invent a random path).
 		note := displayNote(sa, nil, true) + " · 应删除但无 path"
-		raw, berr := buildAuthFileJSON(sa, true, note, nil)
+		extra := map[string]any{}
+		if manualDisableFromAuthJSON(phys.JSON) {
+			extra["manual_disable"] = true
+		}
+		raw, berr := buildAuthFileJSON(sa, true, note, extra)
 		if berr != nil {
 			return fmt.Errorf("no path and build failed: %w", berr)
 		}
@@ -231,7 +249,7 @@ func applyExhaustedPolicy(authIndex, authID string, sa *storedAuth, cr *creditsS
 	case lifecycleDelete:
 		return deleteAuth(authIndex, authID, sa)
 	case lifecycleDisable:
-		return disableAuth(authIndex, authID, sa, cr, reason)
+		return disableAuth(authIndex, authID, sa, cr, reason, nil)
 	default:
 		return nil
 	}
@@ -253,16 +271,21 @@ func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, 
 	name := authFileNameFor(sa)
 	path := ""
 	legacyPath := ""
+	extra := map[string]any{}
 	if err == nil {
 		name, path, legacyPath = resolveAuthFileTarget(sa, phys)
 		// re-read disabled from disk as source of truth
 		disabled = parseDisabledFromAuthJSON(phys.JSON)
 		note = displayNote(sa, cr, disabled)
+		// carry the manual-disable marker forward (note refresh must not clear it)
+		if manualDisableFromAuthJSON(phys.JSON) {
+			extra["manual_disable"] = true
+		}
 	}
 	if lifecycleStateUnchanged(authID, disabled, note) {
 		return nil
 	}
-	raw, err := buildAuthFileJSON(sa, disabled, note, nil)
+	raw, err := buildAuthFileJSON(sa, disabled, note, extra)
 	if err != nil {
 		return err
 	}
@@ -318,6 +341,15 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 
 	region := accountRegion(sa)
 	if region == "cn" && disabled {
+		// Manual disable (panel toggle) must stick: never auto-re-enable an
+		// account the user explicitly disabled, even when credits recover.
+		// Without this guard, reconcile would fight the toggle on every tick
+		// (Bug B: it cannot distinguish manual disable from exhausted auto-
+		// disable — manual_disable makes the intent explicit).
+		if phys != nil && manualDisableFromAuthJSON(phys.JSON) {
+			_ = syncAuthNote(authIndex, authID, sa, cr, true)
+			return lifecycleNone, nil
+		}
 		if shouldReenableCN(true, cr) {
 			if err := reenableAuth(authIndex, authID, sa, cr); err != nil {
 				return lifecycleReenable, err
@@ -342,7 +374,7 @@ func reconcileOneAccount(authIndex, authID string, force bool) (action lifecycle
 		}
 		return lifecycleDelete, deleteAuth(authIndex, authID, sa)
 	case lifecycleDisable:
-		return lifecycleDisable, disableAuth(authIndex, authID, sa, cr, "耗尽")
+		return lifecycleDisable, disableAuth(authIndex, authID, sa, cr, "耗尽", nil)
 	default:
 		// healthy: keep note fresh (throttled)
 		_ = syncAuthNote(authIndex, authID, sa, cr, false)

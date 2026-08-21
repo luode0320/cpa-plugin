@@ -198,6 +198,33 @@ func buildAuthFileJSON(sa *storedAuth, disabled bool, note string, extra map[str
 	return json.Marshal(out)
 }
 
+// mergeAuthDoc replaces the nested auth/account of an existing physical auth
+// doc with refreshed values while preserving every other top-level key
+// (disabled/note/type/provider/logo/manual_disable/...). Used by keepalive's
+// persistAuthTokens — the previous whole-struct json.Marshal dropped all
+// top-level metadata and silently re-enabled manually disabled accounts.
+
+func mergeAuthDoc(raw []byte, sa *storedAuth) ([]byte, error) {
+	if sa == nil {
+		return nil, fmt.Errorf("nil storedAuth")
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil || doc == nil {
+		doc = map[string]any{}
+	}
+	storage, err := json.Marshal(sa)
+	if err != nil {
+		return nil, err
+	}
+	var nested map[string]any
+	if err := json.Unmarshal(storage, &nested); err != nil {
+		return nil, err
+	}
+	doc["auth"] = nested["auth"]
+	doc["account"] = nested["account"]
+	return json.Marshal(doc)
+}
+
 // parseDisabledFromAuthJSON reads top-level disabled from physical auth JSON.
 
 func parseDisabledFromAuthJSON(raw []byte) bool {
@@ -206,6 +233,20 @@ func parseDisabledFromAuthJSON(raw []byte) bool {
 	}
 	_ = json.Unmarshal(raw, &m)
 	return m.Disabled
+}
+
+// manualDisableFromAuthJSON reads the top-level manual_disable flag. It is set
+// when the panel toggle disables an account and cleared on manual re-enable.
+// The host surfaces it in coreauth.Auth.Metadata (like note/priority/websockets);
+// lifecycle reconcile honors it by never auto-re-enabling a manually disabled
+// account, even when credits recover.
+
+func manualDisableFromAuthJSON(raw []byte) bool {
+	var m struct {
+		ManualDisable bool `json:"manual_disable"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	return m.ManualDisable
 }
 
 // isSafeWorkbuddyAuthPath rejects non-workbuddy filenames, empty paths, and

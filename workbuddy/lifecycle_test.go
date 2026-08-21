@@ -326,6 +326,118 @@ func TestParseDisabledFromAuthJSON_StringTruth(t *testing.T) {
 	}
 }
 
+func TestManualDisableFromAuthJSON(t *testing.T) {
+	if !manualDisableFromAuthJSON([]byte(`{"disabled":true,"manual_disable":true}`)) {
+		t.Fatal("want true")
+	}
+	if manualDisableFromAuthJSON([]byte(`{"disabled":true}`)) {
+		t.Fatal("missing defaults false")
+	}
+	if manualDisableFromAuthJSON([]byte(`{"manual_disable":"true"}`)) {
+		t.Fatal("string true must not count")
+	}
+	if manualDisableFromAuthJSON(nil) {
+		t.Fatal("nil defaults false")
+	}
+}
+
+func TestMergeAuthDoc_PreservesTopLevel(t *testing.T) {
+	// Bug A regression: a token-refresh persist must NOT drop top-level
+	// metadata (disabled/note/type/provider/logo/manual_disable) the way the
+	// old json.Marshal(sa) whole-file overwrite did.
+	sa := &storedAuth{
+		Auth:    storedTokens{AccessToken: "at-new", RefreshToken: "rt-new", ExpiresAt: 42, Domain: "www.codebuddy.cn"},
+		Account: storedAccount{UID: "u1", EnterpriseID: "e1", Nickname: "nick"},
+	}
+	raw, err := mergeAuthDoc([]byte(`{
+		"type":"workbuddy","provider":"workbuddy","logo":"https://x/logo.png",
+		"disabled":true,"note":"CN · 手动禁用","manual_disable":true,
+		"auth":{"accessToken":"at-old","refreshToken":"rt-old","expiresAt":1,"domain":"www.codebuddy.cn"},
+		"account":{"uid":"u1","enterpriseId":"e1","nickname":"nick"}
+	}`), sa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	// Top-level fields survive.
+	if m["disabled"] != true {
+		t.Fatalf("disabled lost: %v", m["disabled"])
+	}
+	if m["manual_disable"] != true {
+		t.Fatalf("manual_disable lost: %v", m["manual_disable"])
+	}
+	if m["note"] != "CN · 手动禁用" {
+		t.Fatalf("note lost: %v", m["note"])
+	}
+	if m["type"] != providerName || m["provider"] != providerName {
+		t.Fatalf("type/provider lost: %v / %v", m["type"], m["provider"])
+	}
+	if m["logo"] == nil || m["logo"] == "" {
+		t.Fatal("logo lost")
+	}
+	// Nested auth replaced with refreshed values.
+	auth, _ := m["auth"].(map[string]any)
+	if auth == nil || auth["accessToken"] != "at-new" || auth["refreshToken"] != "rt-new" {
+		t.Fatalf("auth not refreshed: %v", m["auth"])
+	}
+	if auth["expiresAt"] != float64(42) {
+		t.Fatalf("expiresAt not refreshed: %v", auth["expiresAt"])
+	}
+}
+
+func TestMergeAuthDoc_EmptyRaw(t *testing.T) {
+	sa := &storedAuth{
+		Auth:    storedTokens{AccessToken: "at", Domain: "www.codebuddy.cn"},
+		Account: storedAccount{UID: "u1"},
+	}
+	raw, err := mergeAuthDoc(nil, sa)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	auth, _ := m["auth"].(map[string]any)
+	if auth == nil || auth["accessToken"] != "at" {
+		t.Fatalf("empty raw must still carry storage: %v", m)
+	}
+}
+
+func TestBuildAuthFileJSON_ManualDisableMarker(t *testing.T) {
+	sa := &storedAuth{
+		Auth:    storedTokens{AccessToken: "at", Domain: "www.codebuddy.cn"},
+		Account: storedAccount{UID: "u1"},
+	}
+	// Manual disable path: extra carries the marker.
+	raw, err := buildAuthFileJSON(sa, true, "CN · 手动禁用", map[string]any{"manual_disable": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["manual_disable"] != true {
+		t.Fatalf("marker missing: %v", m["manual_disable"])
+	}
+	// Manual re-enable path: no extra → marker cleared.
+	raw2, err := buildAuthFileJSON(sa, false, "CN · 可用", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m2 map[string]any
+	if err := json.Unmarshal(raw2, &m2); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m2["manual_disable"]; ok {
+		t.Fatalf("reenable must clear marker: %v", m2["manual_disable"])
+	}
+}
+
 func TestListEntryMatchesUID(t *testing.T) {
 	uid := "00e26541-1884-4916-9c26-253a325d64ac"
 	want := "workbuddy-" + uid + ".json"

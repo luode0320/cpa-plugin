@@ -149,6 +149,13 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 // persistAuthTokens writes the updated credential back through the host API.
 // The host's file watcher reloads it; we deliberately do NOT dual-write the
 // physical path (same rule as hostAuthPersist).
+//
+// Bug A fix: the previous json.Marshal(sa) serialized only the nested
+// auth/account struct and OVERWROTE the whole file, silently dropping every
+// top-level metadata key (disabled/note/type/provider/logo/manual_disable).
+// Result: each 22:00 keepalive token refresh re-enabled accounts the user had
+// disabled via the panel. We now merge the refreshed nested storage into the
+// existing physical doc so all top-level fields survive.
 func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	phys, err := hostAuthGetPhysical(authIndex)
 	if err != nil {
@@ -158,7 +165,8 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	if name == "" {
 		name = authFileNameFor(sa)
 	}
-	raw, err := json.Marshal(sa)
+	// Keep the existing top-level doc as-is; replace only auth/account.
+	raw, err := mergeAuthDoc(phys.JSON, sa)
 	if err != nil {
 		return err
 	}
