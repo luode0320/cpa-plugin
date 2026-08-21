@@ -101,6 +101,8 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .toast.err{border-left-color:var(--err);background:var(--err-soft)}
 button.done{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border);cursor:default;opacity:1}
 button.done:disabled{opacity:1}
+button.danger{background:var(--err-soft);color:var(--err);border:1px solid var(--err-border)}
+button.danger:hover{background:var(--err);color:#fff}
 .toast .t{font-weight:600;margin-bottom:3px}
 .toast .d{color:var(--mut);font-size:12px;line-height:1.45}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--on-acc);border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
@@ -326,6 +328,7 @@ function bindCardActions(root){
       else if(act==="claim") claimTrial(idx, ev.currentTarget);
       else if(act==="select") selectAuth(idx, ev.currentTarget);
       else if(act==="refresh") refreshCredits(idx, ev.currentTarget);
+      else if(act==="toggle") toggleAuth(idx, ev.currentTarget);
     });
   });
 }
@@ -357,13 +360,19 @@ function card(a){
     ? `<button class="done" disabled="disabled">使用中</button>`
     : (disabled?``:`<button class="sec" data-action="select" data-auth-index="${esc(a.auth_index)}">选用</button>`);
   const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
+  // Manual enable/disable toggle. Disabled accounts show "启用"; live accounts
+  // show a danger-styled "禁用". Disabling the active account is allowed — the
+  // dashboard re-picks a live candidate on the next reload.
+  const toggleBtn=disabled
+    ? `<button class="sec" data-action="toggle" data-auth-index="${esc(a.auth_index)}">启用</button>`
+    : `<button class="danger" data-action="toggle" data-auth-index="${esc(a.auth_index)}" title="禁用后该账号不再参与路由选择">禁用</button>`;
   const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
   <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
-  <div class="actions">${selectBtn}${refreshBtn}${actionHTML}</div>
+  <div class="actions">${selectBtn}${refreshBtn}${actionHTML}${toggleBtn}</div>
   </div>`;
 }
 let currentFilter="all";
@@ -760,6 +769,29 @@ async function refreshCredits(idx, btn){
   }catch(e){
     toast("刷新失败","err",e.message||String(e));
   }finally{
+    busy(btn,false);
+  }
+}
+async function toggleAuth(idx, btn){
+  // Target state = inverse of the card's current state. The backend receives
+  // the explicit target (not a flip) so double-clicks are idempotent.
+  const a=(lastAccounts||[]).find(x=>x.auth_index===idx);
+  const target=!a||!a.disabled;
+  busy(btn,true);
+  try{
+    const d=await api("/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({auth_index:idx,disabled:target})});
+    if(d.error){
+      toast((d.nickname||"账号")+"：操作失败","err",d.error);
+      busy(btn,false);
+      return;
+    }
+    const who=d.nickname||idx;
+    toast(d.disabled?"已禁用":"已启用", d.disabled?"warn":"ok", who);
+    // Immediate reload: re-renders the card, re-picks active account if the
+    // disabled one was selected, and refreshes the summary counts.
+    await load(false);
+  }catch(e){
+    toast("操作失败","err",e.message||String(e));
     busy(btn,false);
   }
 }

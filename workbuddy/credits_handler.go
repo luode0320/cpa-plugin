@@ -185,6 +185,75 @@ func handleSelectAuth(req pluginapi.ManagementRequest) map[string]any {
 	return map[string]any{"error": "account not found", "auth_index": authIndex}
 }
 
+// handleToggleAuth manually enables or disables one account. The body carries
+// the TARGET state explicitly ({disabled: true|false}) rather than a flip, so
+// duplicate clicks are idempotent. Disable works for any account (including
+// the currently active one — the dashboard re-picks on next load). Enable is
+// guarded by the same policy as the lifecycle scheduler: accounts with unknown
+// or exhausted credits are refused with a clear error instead of silently
+// flipping disabled:false and letting reconcile flip it back on the next tick.
+func handleToggleAuth(req pluginapi.ManagementRequest) map[string]any {
+	var body struct {
+		AuthIndex string `json:"auth_index"`
+		Disabled  *bool  `json:"disabled"`
+	}
+	_ = json.Unmarshal(req.Body, &body)
+	authIndex := strings.TrimSpace(body.AuthIndex)
+	if authIndex == "" {
+		return map[string]any{"error": "auth_index is required"}
+	}
+	if body.Disabled == nil {
+		return map[string]any{"error": "disabled (true/false) is required", "auth_index": authIndex}
+	}
+	target := *body.Disabled
+	files, err := hostAuthList()
+	if err != nil {
+		return map[string]any{"error": err.Error()}
+	}
+	for _, f := range files {
+		if f.AuthIndex != authIndex {
+			continue
+		}
+		sa, err := hostAuthGet(f.AuthIndex)
+		if err != nil {
+			return map[string]any{"error": err.Error(), "auth_index": authIndex}
+		}
+		// Physical file is the source of truth for the current state (host list may lag).
+		cur := f.Disabled
+		if phys, err2 := hostAuthGetPhysical(authIndex); err2 == nil {
+			cur = parseDisabledFromAuthJSON(phys.JSON)
+		}
+		if cur == target {
+			return map[string]any{"ok": true, "idempotent": true, "auth_index": authIndex, "disabled": cur, "nickname": sa.Account.Nickname, "uid": sa.Account.UID}
+		}
+		if target {
+			if err := disableAuth(authIndex, f.ID, sa, cachedCredits(f.ID), "手动禁用"); err != nil {
+				return map[string]any{"error": err.Error(), "auth_index": authIndex}
+			}
+		} else {
+			// Re-enable: verify the account still has spendable credits. Uses the
+			// shared cache path (singleflight + stale-while-error), so a missing
+			// cache entry triggers one upstream fetch instead of guessing.
+			_, _, cr, errs := cachedAccountDetails(f.ID, sa, false)
+			if cr == nil {
+				msg := "账号积分未知，无法启用"
+				if len(errs) > 0 {
+					msg += "：" + strings.Join(errs, "; ")
+				}
+				return map[string]any{"error": msg, "auth_index": authIndex}
+			}
+			if isCreditsExhausted(cr) {
+				return map[string]any{"error": "账号已耗尽，启用后会被系统自动再次禁用", "auth_index": authIndex, "remain": cr.TotalRemain}
+			}
+			if err := reenableAuth(authIndex, f.ID, sa, cr); err != nil {
+				return map[string]any{"error": err.Error(), "auth_index": authIndex}
+			}
+		}
+		return map[string]any{"ok": true, "auth_index": authIndex, "disabled": target, "nickname": sa.Account.Nickname, "uid": sa.Account.UID}
+	}
+	return map[string]any{"error": "account not found", "auth_index": authIndex}
+}
+
 // handleCreditsQuery returns real-time credits for one or all accounts.
 // Pass ?auth_index=<idx> to query a single account; omit for all.
 // Single-account mode returns full account info (nickname, region, credits,

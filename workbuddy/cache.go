@@ -171,6 +171,21 @@ func pruneAccountCacheSoftCap(capN int) {
 	}
 }
 
+// cachedCredits returns the cached credits snapshot for an auth ID, or nil
+// when absent. Used by handlers that only need the last known values (e.g.
+// displayNote in manual enable/disable) without triggering an upstream fetch.
+func cachedCredits(authID string) *creditsSummary {
+	v, ok := accountCache.Load(authID)
+	if !ok {
+		return nil
+	}
+	e, ok := v.(*accountCacheEntry)
+	if !ok || e == nil {
+		return nil
+	}
+	return e.credits
+}
+
 // cachedCheckinToday returns cached today_checked_in when present.
 func cachedCheckinToday(authID string) *bool {
 	v, ok := accountCache.Load(authID)
