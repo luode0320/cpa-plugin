@@ -251,7 +251,16 @@ func handleToggleAuth(req pluginapi.ManagementRequest) map[string]any {
 				return map[string]any{"error": err.Error(), "auth_index": authIndex}
 			}
 		}
-		return map[string]any{"ok": true, "auth_index": authIndex, "disabled": target, "nickname": sa.Account.Nickname, "uid": sa.Account.UID}
+		// The host applies direct file writes via its async watcher; wait until
+		// the in-memory scheduler state matches before telling the panel it may
+		// reload. If the host lags, still report success — the write is on disk
+		// and the watcher settles it momentarily.
+		confirmed := waitAuthDisabledState(authIndex, target, 2*time.Second)
+		out := map[string]any{"ok": true, "auth_index": authIndex, "disabled": target, "nickname": sa.Account.Nickname, "uid": sa.Account.UID}
+		if !confirmed {
+			out["warning"] = "已写入，宿主同步中，请稍后刷新"
+		}
+		return out
 	}
 	return map[string]any{"error": "account not found", "auth_index": authIndex}
 }

@@ -169,6 +169,64 @@ func hostAuthSaveJSON(name string, raw []byte) error {
 	return nil
 }
 
+// writeAuthFileDirect atomically replaces the physical auth file with raw.
+//
+// CRITICAL: this is the ONLY write path that keeps a manually disabled
+// account disabled in the host's memory. host.auth.save rebuilds the auth
+// record with StatusActive hardcoded (host buildAuthFromFileData ignores the
+// file's disabled field), so every save silently re-enables the account —
+// the root cause of "toggle clicks but nothing changes". A direct write lets
+// the host's file watcher re-synthesize the auth from the new content
+// (synthesizer/file.go force-applies top-level disabled) and update the
+// scheduler, exactly like the host's own management panel toggle.
+func writeAuthFileDirect(path string, raw []byte) error {
+	if !isSafeWorkbuddyAuthPath(path) {
+		return fmt.Errorf("refusing direct write to unsafe path: %s", path)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("refusing direct write to relative path: %s", path)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".workbuddy-write-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace auth file: %w", err)
+	}
+	return nil
+}
+
+// persistAuthDirect writes raw to the physical auth path (if known) and drops
+// a legacy sibling file when the canonical name differs. It fails loudly when
+// no physical path is available — callers must never fall back to host.auth.save
+// for disable/re-enable writes, since that channel re-enables the account.
+func persistAuthDirect(name, path, legacyPath string, raw []byte) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return fmt.Errorf("no physical auth path for %s", name)
+	}
+	if err := writeAuthFileDirect(path, raw); err != nil {
+		return err
+	}
+	if legacyPath != "" && !strings.EqualFold(filepath.Base(legacyPath), filepath.Base(path)) {
+		_ = deleteAuthFileInDir(legacyPath, filepath.Dir(legacyPath))
+	}
+	return nil
+}
+
 // lifecycleStateUnchanged avoids redundant saves when note/disabled unchanged.
 
 func buildAuthFileJSON(sa *storedAuth, disabled bool, note string, extra map[string]any) ([]byte, error) {

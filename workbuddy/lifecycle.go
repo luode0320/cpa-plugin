@@ -115,7 +115,10 @@ func disableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary, r
 	if err != nil {
 		return err
 	}
-	if err := hostAuthPersistMigrate(name, path, legacyPath, raw); err != nil {
+	// Direct physical write (NOT host.auth.save): the save channel rebuilds
+	// the record as Active and would silently re-enable the account. The file
+	// watcher applies top-level disabled to the scheduler instead.
+	if err := persistAuthDirect(name, path, legacyPath, raw); err != nil {
 		return err
 	}
 	rememberLifecycleState(authID, true, note)
@@ -147,7 +150,10 @@ func reenableAuth(authIndex, authID string, sa *storedAuth, cr *creditsSummary) 
 	if err != nil {
 		return err
 	}
-	if err := hostAuthPersistMigrate(name, path, legacyPath, raw); err != nil {
+	// Direct physical write — host.auth.save would force the record Active
+	// (fine here) but would ALSO reset the scheduler state via the persist
+	// hook; the watcher path keeps every top-level field intact.
+	if err := persistAuthDirect(name, path, legacyPath, raw); err != nil {
 		return err
 	}
 	rememberLifecycleState(authID, false, note)
@@ -289,7 +295,9 @@ func syncAuthNote(authIndex, authID string, sa *storedAuth, cr *creditsSummary, 
 	if err != nil {
 		return err
 	}
-	if err := hostAuthPersistMigrate(name, path, legacyPath, raw); err != nil {
+	// Direct physical write keeps the disabled state and the manual_disable
+	// marker intact (host.auth.save would rebuild the record as Active).
+	if err := persistAuthDirect(name, path, legacyPath, raw); err != nil {
 		return err
 	}
 	rememberLifecycleState(authID, disabled, note)

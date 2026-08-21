@@ -146,16 +146,18 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 	return "refreshed", nil
 }
 
-// persistAuthTokens writes the updated credential back through the host API.
-// The host's file watcher reloads it; we deliberately do NOT dual-write the
-// physical path (same rule as hostAuthPersist).
+// persistAuthTokens writes the updated credential back to the physical auth
+// file. The host's file watcher reloads it into the scheduler.
 //
-// Bug A fix: the previous json.Marshal(sa) serialized only the nested
-// auth/account struct and OVERWROTE the whole file, silently dropping every
-// top-level metadata key (disabled/note/type/provider/logo/manual_disable).
-// Result: each 22:00 keepalive token refresh re-enabled accounts the user had
-// disabled via the panel. We now merge the refreshed nested storage into the
-// existing physical doc so all top-level fields survive.
+// Bug A fix (both layers): the original json.Marshal(sa) OVERWROTE the whole
+// file and dropped every top-level key (disabled/note/type/provider/logo/
+// manual_disable) — each 22:00 keepalive refresh re-enabled accounts disabled
+// via the panel. v0.9.2 fixed the doc merge; this fix replaces the final
+// host.auth.save hop, because that RPC rebuilds the auth record with
+// StatusActive hardcoded and resets the in-memory scheduler state to enabled
+// on every write, undoing the merge we just preserved. A direct physical
+// write is the only channel where the watcher applies top-level disabled to
+// the scheduler.
 func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	phys, err := hostAuthGetPhysical(authIndex)
 	if err != nil {
@@ -170,7 +172,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	if err != nil {
 		return err
 	}
-	return hostAuthSaveJSON(name, raw)
+	return persistAuthDirect(name, phys.Path, "", raw)
 }
 
 // markSessionDead flags an auth disabled via the host's standard `disabled`
@@ -199,7 +201,9 @@ func markSessionDead(authIndex, authID string, sa *storedAuth) error {
 	if name == "" {
 		name = authFileNameFor(sa)
 	}
-	return hostAuthSaveJSON(name, raw)
+	// Direct physical write — host.auth.save rebuilds the record as Active and
+	// would undo the very disable we are trying to persist.
+	return persistAuthDirect(name, phys.Path, "", raw)
 }
 
 // keepaliveSummary is one row of the daily run, surfaced via the

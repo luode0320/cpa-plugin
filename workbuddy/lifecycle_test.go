@@ -438,6 +438,72 @@ func TestBuildAuthFileJSON_ManualDisableMarker(t *testing.T) {
 	}
 }
 
+func TestWriteAuthFileDirect_BasicAndOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "workbuddy-test-uid.json")
+	first := []byte(`{"disabled":true,"note":"手动禁用"}`)
+	if err := writeAuthFileDirect(path, first); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(got) != string(first) {
+		t.Fatalf("content mismatch: %s", got)
+	}
+	// Overwrite semantics: second write fully replaces the file.
+	second := []byte(`{"disabled":false}`)
+	if err := writeAuthFileDirect(path, second); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	got, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read after overwrite: %v", err)
+	}
+	if string(got) != string(second) {
+		t.Fatalf("overwrite mismatch: %s", got)
+	}
+	// No leftover temp files.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteAuthFileDirect_RejectsUnsafePaths(t *testing.T) {
+	dir := t.TempDir()
+	// Literal ".." must survive into the path string — filepath.Join would
+	// Clean it away and defeat the traversal check.
+	traversal := filepath.Join(dir, "dummy") + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "workbuddy-esc.json"
+	cases := []string{
+		"",                                            // empty
+		filepath.Join(dir, "other-provider.json"),     // wrong prefix
+		filepath.Join(dir, "workbuddy-evil.txt"),      // wrong suffix
+		traversal,                                     // literal .. traversal
+		"workbuddy-relative.json",                     // relative path
+		filepath.Join(dir, "workbuddy.json"),          // canonical legacy name is allowed shape
+	}
+	// The last case is expected to SUCCEED (legacy canonical name is legal).
+	for i, p := range cases[:len(cases)-1] {
+		if err := writeAuthFileDirect(p, []byte(`{}`)); err == nil {
+			t.Errorf("case %d (%q): expected error, got nil", i, p)
+		}
+	}
+	// Legacy canonical name must still work.
+	if err := writeAuthFileDirect(cases[len(cases)-1], []byte(`{}`)); err != nil {
+		t.Fatalf("legacy canonical name rejected: %v", err)
+	}
+	if _, err := os.Stat(cases[len(cases)-1]); err != nil {
+		t.Fatalf("legacy canonical file missing: %v", err)
+	}
+}
+
 func TestListEntryMatchesUID(t *testing.T) {
 	uid := "00e26541-1884-4916-9c26-253a325d64ac"
 	want := "workbuddy-" + uid + ".json"

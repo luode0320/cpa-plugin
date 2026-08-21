@@ -1,12 +1,14 @@
 // host_auth.go wraps the host's auth-store RPC (host.auth.list / get /
 // get_bundle). These are the only paths the plugin uses to read auth files;
-// writes go through hostAuthPersist / hostAuthPersistMigrate in lifecycle.go.
+// writes go through persistAuthDirect (physical file) so the host's file
+// watcher — not host.auth.save — syncs disabled state into the scheduler.
 package main
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -79,4 +81,29 @@ func hostAuthGetBundle(authIndex string) (*storedAuth, *hostAuthPhysical, error)
 		return nil, phys, err
 	}
 	return sa, phys, nil
+}
+
+// waitAuthDisabledState polls host.auth.list until the account's in-memory
+// disabled state matches want. The host applies direct file writes through its
+// async file watcher, so a toggle must confirm the new state before the panel
+// reloads — otherwise the dashboard reads the stale pre-write memory state.
+// Returns true when confirmed, false on timeout.
+func waitAuthDisabledState(authIndex string, want bool, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		files, err := hostAuthList()
+		if err == nil {
+			for _, f := range files {
+				if f.AuthIndex != authIndex {
+					continue
+				}
+				if f.Disabled == want {
+					return true
+				}
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
 }
