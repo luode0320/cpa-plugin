@@ -152,6 +152,12 @@ func configure(raw []byte) {
 	trackerCfgMu.Unlock()
 
 	reopenStore(next)
+	reg := trackerRegistration()
+	trackerInfof("configured: feed_enabled=%v feed=%s db=%s retention_days=%d flush=%s poll=%s", next.FeedEnabled, next.FeedPath, next.DBPath, next.RetentionDays, next.FlushInterval, next.PollInterval)
+	storeMu.RLock()
+	storeOpen := usageStore != nil
+	storeMu.RUnlock()
+	trackerInfof("store open: %v | version=%s capabilities: usage_plugin=%v management_api=%v", storeOpen, reg.Metadata.Version, reg.Capabilities.UsagePlugin, reg.Capabilities.ManagementAPI)
 	importerOnce.Do(func() {
 		go feedImporterLoop()
 	})
@@ -225,16 +231,30 @@ func usageStatsOpen() bool {
 // transiently closed during a reopenStore swap; the right response is to
 // ack with recorded=false and let the host keep broadcasting.
 func handleUsage(raw []byte) ([]byte, error) {
+	trackerInfof("usage.handle: received %d bytes", len(raw))
+
 	storeMu.RLock()
 	store := usageStore
 	storeMu.RUnlock()
 	if store == nil {
+		trackerWarnf("usage.handle: store not initialized, dropping record")
 		return okEnvelope(map[string]any{"recorded": false, "reason": "store not initialized"})
 	}
+	// Lightweight peek for the diagnostic log; the store performs the full
+	// canonical decode internally.
+	var peek struct {
+		Provider string `json:"Provider"`
+		Model    string `json:"Model"`
+		Alias    string `json:"Alias"`
+		Source   string `json:"Source"`
+		Failed   bool   `json:"Failed"`
+	}
+	_ = json.Unmarshal(raw, &peek)
 	if err := store.RecordUsageRecord(raw); err != nil {
-		trackerWarnf("usage.handle: record failed (non-fatal): %v", err)
+		trackerWarnf("usage.handle: record failed (non-fatal): provider=%s model=%s err=%v", peek.Provider, peek.Model, err)
 		return okEnvelope(map[string]any{"recorded": false, "reason": err.Error()})
 	}
+	trackerInfof("usage.handle: recorded provider=%s model=%s alias=%s source=%s failed=%v", peek.Provider, peek.Model, peek.Alias, peek.Source, peek.Failed)
 	return okEnvelope(map[string]any{"recorded": true})
 }
 
@@ -380,6 +400,10 @@ func ingestFeedChunk(store *usagestats.Store, chunk []byte) int64 {
 		}
 	}
 	return consumed
+}
+
+func trackerInfof(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[token-usage-tracker] "+format+"\n", args...)
 }
 
 func trackerWarnf(format string, args ...any) {

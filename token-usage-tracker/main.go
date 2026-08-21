@@ -87,14 +87,30 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 }
 
 //export cliproxyPluginCall
-func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
-	if response != nil {
-		response.ptr = nil
-		response.len = 0
+func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) (result C.int) {
+	if response == nil {
+		return 1
 	}
+	response.ptr = nil
+	response.len = 0
+
+	// Never leak a Go panic across the cgo boundary uncaught, and never
+	// return a non-zero code for a recoverable business error: the host
+	// treats a non-zero return (or a missing response buffer) as a fatal
+	// plugin failure and fuses the whole plugin, which silently kills the
+	// UsagePlugin broadcast for every subsequent api-provider record.
+	// Mirror the original cap-token-usage-tracker ABI (main_cgo.go): encode
+	// any error — including panics — as a JSON error envelope and return 0.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			writeResponse(response, errorEnvelope("plugin_panic", fmt.Sprintf("plugin call failed: %v", recovered)))
+			result = 0
+		}
+	}()
+
 	if method == nil {
 		writeResponse(response, errorEnvelope("invalid_method", "method is required"))
-		return 1
+		return 0
 	}
 	var requestBytes []byte
 	if request != nil && requestLen > 0 {
@@ -103,7 +119,7 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	raw, errHandle := handleMethod(C.GoString(method), requestBytes)
 	if errHandle != nil {
 		writeResponse(response, errorEnvelope("plugin_error", errHandle.Error()))
-		return 1
+		return 0
 	}
 	writeResponse(response, raw)
 	return 0
@@ -155,7 +171,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.1.3"
+var version = "0.1.4"
 
 func trackerRegistration() registration {
 	return registration{
