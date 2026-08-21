@@ -125,6 +125,64 @@ func TestRecordUsageRecordNilStore(t *testing.T) {
 	}
 }
 
+// TestRecordUsageRecordWithRawAPIKey reproduces the real CPA broadcast shape:
+// Dimensions.APIKey carries the raw upstream key while APIKeyHash and
+// APIKeyGeneration are absent. RecordUsageRecord must zero the whole envelope
+// instead of tripping the store's ciphertext-consistency guard
+// ("API key ciphertext, fingerprint, and generation must be recorded together").
+func TestRecordUsageRecordWithRawAPIKey(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Config{
+		DataPath:        filepath.Join(dir, "usage-stats.db"),
+		RetentionDays:   365,
+		FlushInterval:   100 * time.Millisecond,
+		FlushMaxRecords: 10,
+		SyncOnRecord:    true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	raw, _ := json.Marshal(map[string]any{
+		"Provider":     "openai-compatible-ainb",
+		"ExecutorType": "openaicompatexecutor",
+		"Model":        "gpt-5.6-sol",
+		"Alias":        "gpt-5.6-sol",
+		"APIKey":       "sk-raw-upstream-secret-key-do-not-persist",
+		"AuthID":       "key-xyz",
+		"AuthIndex":    "key-xyz",
+		"AuthType":     "apikey",
+		"Source":       "sk-raw-upstream-secret-key-do-not-persist",
+		"RequestedAt":  time.Now().UTC().Add(-1 * time.Minute),
+		"Failed":       false,
+		"Failure":      map[string]any{"StatusCode": 0},
+		"Detail": map[string]any{
+			"InputTokens":  int64(100),
+			"OutputTokens": int64(50),
+			"TotalTokens":  int64(150),
+		},
+	})
+	if err := store.RecordUsageRecord(raw); err != nil {
+		t.Fatalf("RecordUsageRecord with raw APIKey should not trip the consistency guard: %v", err)
+	}
+
+	res := store.HandleQuery(http.MethodGet, "/requests", url.Values{"limit": []string{"10"}}, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/requests status=%d body=%s", res.Status, res.Body)
+	}
+	var page RequestPage
+	if err := json.Unmarshal(res.Body, &page); err != nil {
+		t.Fatalf("/requests decode: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("/requests Total=%d want 1", page.Total)
+	}
+	if page.Items[0].Model != "gpt-5.6-sol" {
+		t.Errorf("item.Model=%q want gpt-5.6-sol", page.Items[0].Model)
+	}
+}
+
 func TestRecordUsageRecordMalformed(t *testing.T) {
 	dir := t.TempDir()
 	store, err := Open(Config{

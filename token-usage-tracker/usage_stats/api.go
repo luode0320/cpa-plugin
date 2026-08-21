@@ -40,6 +40,18 @@ func (s *Store) RecordUsageRecord(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	// The host UsagePlugin broadcast carries the raw upstream API key in
+	// Dimensions.APIKey, but never the matching APIKeyHash / APIKeyGeneration
+	// (those are produced by the tracker's own crypto layer, which is disabled
+	// here — see Open). The store enforces a ciphertext-consistency guard that
+	// requires all three to be recorded together, so zero the whole envelope
+	// before persisting. This mirrors the original cap-token-usage-tracker's
+	// "source missing" branch: no API-key identity dimension is retained, but
+	// provider / model / alias accounting still lands.
+	usage.Dimensions.APIKey = ""
+	usage.Dimensions.APIKeyHash = ""
+	usage.Dimensions.APIKeyGeneration = 0
+	usage.Dimensions.APIKeyStatus = apiKeyStatusSourceMissing
 	return s.Record(usage)
 }
 
