@@ -155,7 +155,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.1.1"
+var version = "0.1.2"
 
 func trackerRegistration() registration {
 	return registration{
@@ -179,6 +179,7 @@ func trackerRegistration() registration {
 		},
 		Capabilities: registrationCapability{
 			ManagementAPI: true,
+			UsagePlugin:   true,
 		},
 	}
 }
@@ -204,6 +205,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(managementRegistration())
 	case pluginabi.MethodManagementHandle:
 		return handleManagement(request)
+	case pluginabi.MethodUsageHandle:
+		return handleUsage(request)
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}

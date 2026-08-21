@@ -197,6 +197,28 @@ func usageStatsOpen() bool {
 	return usageStore != nil
 }
 
+// handleUsage is the UsagePlugin entry point (pluginabi.MethodUsageHandle).
+// The host broadcasts one canonical pluginapi.UsageRecord after every request
+// served by non-plugin executors — i.e. third-party api providers. Those
+// records are recorded into the local store so the dashboard shows them next
+// to the workbuddy records that arrive via the shared feed.
+//
+// workbuddy plugin-executor requests do NOT arrive here: the host UsagePlugin
+// broadcast never fires for plugin executors (that is why workbuddy appends
+// the shared NDJSON feed instead), so no cross-path dedup is needed.
+func handleUsage(raw []byte) ([]byte, error) {
+	storeMu.RLock()
+	store := usageStore
+	storeMu.RUnlock()
+	if store == nil {
+		return okEnvelope(map[string]any{"recorded": false})
+	}
+	if err := store.RecordUsageRecord(raw); err != nil {
+		return nil, err
+	}
+	return okEnvelope(map[string]any{"recorded": true})
+}
+
 // usageStatsQuery dispatches a statistics query against the store.
 func usageStatsQuery(method, rel string, query url.Values, body []byte, headers http.Header) usagestats.QueryResult {
 	storeMu.RLock()

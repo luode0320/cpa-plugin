@@ -277,6 +277,138 @@ func TestConfigureParsesConfigYAML(t *testing.T) {
 	}
 }
 
+// usageRecordJSON mirrors pluginapi.UsageRecord as serialized by the CPA host
+// for the usage.handle broadcast (api-provider / third-party requests).
+func usageRecordJSON(provider, model, authID string, input, output int64) []byte {
+	raw, _ := jsonMarshal(map[string]any{
+		"Provider":        provider,
+		"ExecutorType":    "openaicompatexecutor",
+		"Model":           model,
+		"Alias":           model,
+		"AuthID":          authID,
+		"AuthIndex":       authID,
+		"AuthType":        "apikey",
+		"Source":          "https://api.example.com/v1",
+		"Generate":        true,
+		"RequestedAt":     time.Now().UTC().Add(-2 * time.Minute),
+		"Latency":         int64(1_500_000_000),
+		"Failed":          false,
+		"Detail":          map[string]any{"InputTokens": input, "OutputTokens": output, "TotalTokens": input + output},
+		"Failure":         map[string]any{"StatusCode": 0, "Body": ""},
+	})
+	return raw
+}
+
+// TestHandleUsageRecordsAPIServiceProvider verifies the UsagePlugin entry
+// point: a usage.handle broadcast carrying a third-party api-provider record
+// is recorded into the store and shows up in the dashboard alongside
+// workbuddy feed records.
+func TestHandleUsageRecordsAPIServiceProvider(t *testing.T) {
+	resetFeedState()
+	defer resetFeedState()
+
+	dir := t.TempDir()
+	store, err := usagestats.Open(usagestats.Config{
+		DataPath:        filepath.Join(dir, "stats.db"),
+		RetentionDays:   365,
+		FlushInterval:   time.Second,
+		FlushMaxRecords: 100,
+		SyncOnRecord:    true,
+	})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	storeMu.Lock()
+	usageStore = store
+	storeMu.Unlock()
+
+	// 1) api-provider record via usage.handle (the previously-missing path).
+	raw := usageRecordJSON("openai-compatible-provider", "gpt-5.6-sol", "key-abc", 1000, 500)
+	out, err := handleUsage(raw)
+	if err != nil {
+		t.Fatalf("handleUsage: %v", err)
+	}
+	var env struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Recorded bool `json:"recorded"`
+		} `json:"result"`
+	}
+	if err := jsonUnmarshal(out, &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if !env.OK || !env.Result.Recorded {
+		t.Fatalf("envelope ok=%v recorded=%v want ok+recorded", env.OK, env.Result.Recorded)
+	}
+
+	// 2) one workbuddy record via the shared feed (existing path).
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := store.RecordFeedNDJSON(validFeedLine(now.Add(-time.Minute).Format(time.RFC3339Nano), "deepseek-v4-flash", "u-1", 100, 200, 350)); err != nil {
+		t.Fatalf("RecordFeedNDJSON: %v", err)
+	}
+
+	// Both must be visible: 2 requests, and the api-provider model present.
+	q := url.Values{"range": []string{"24h"}}
+	res := store.HandleQuery(http.MethodGet, "/stats", q, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/stats status=%d body=%s", res.Status, res.Body)
+	}
+	if got := jsonRequestsTotal(res.Body); got != 2 {
+		t.Errorf("requests=%d want 2 (feed + usage.handle)", got)
+	}
+	if got := jsonTokensTotal(res.Body); got != 350+1500 {
+		t.Errorf("total_tokens=%d want %d", got, 350+1500)
+	}
+
+	res = store.HandleQuery(http.MethodGet, "/requests", url.Values{"limit": []string{"10"}}, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/requests status=%d body=%s", res.Status, res.Body)
+	}
+	var page struct {
+		Items []struct {
+			Model string `json:"model"`
+		} `json:"items"`
+	}
+	if err := jsonUnmarshal(res.Body, &page); err != nil {
+		t.Fatalf("/requests decode: %v", err)
+	}
+	found := false
+	for _, item := range page.Items {
+		if item.Model == "gpt-5.6-sol" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("gpt-5.6-sol record missing from /requests after usage.handle")
+	}
+}
+
+// TestHandleUsageNoStore verifies the broadcast is safely ignored when the
+// store is not initialized (never an error — usage is best-effort).
+func TestHandleUsageNoStore(t *testing.T) {
+	resetFeedState()
+	defer resetFeedState()
+
+	out, err := handleUsage(usageRecordJSON("openai-compatible-provider", "gpt-5.6-sol", "key-abc", 10, 10))
+	if err != nil {
+		t.Fatalf("handleUsage without store: %v", err)
+	}
+	var env struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Recorded bool `json:"recorded"`
+		} `json:"result"`
+	}
+	if err := jsonUnmarshal(out, &env); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	if !env.OK || env.Result.Recorded {
+		t.Fatalf("envelope ok=%v recorded=%v want ok+unrecorded", env.OK, env.Result.Recorded)
+	}
+}
+
 // ---- small helpers ----
 
 func jsonUnmarshal(raw []byte, v any) error {

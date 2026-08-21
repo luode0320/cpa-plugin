@@ -26,6 +26,23 @@ func Open(config Config) (*Store, error) {
 	return openStore(config)
 }
 
+// RecordUsageRecord decodes one host-delivered UsageRecord (the CPA
+// UsagePlugin broadcast that captures api-provider / third-party requests
+// outside the workbuddy feed path) and records it into the store. The record
+// shape is pluginapi.UsageRecord JSON; the decode reuses the same canonical
+// normalization as the original cap-token-usage-tracker plugin so api-provider
+// requests show up in the dashboard alongside workbuddy feed records.
+func (s *Store) RecordUsageRecord(raw []byte) error {
+	if s == nil {
+		return fmt.Errorf("store is not initialized")
+	}
+	usage, err := decodeUsage(raw, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	return s.Record(usage)
+}
+
 // DashboardHTML returns the standalone token usage dashboard page (HTML).
 func DashboardHTML() []byte {
 	return []byte(dashboardHTML)
