@@ -1,0 +1,3 @@
+interface:
+  display_name: "cpa-workbuddy-plugin 发布链路"
+  short_description: "插件版本发布：版本 bump、commit、HTTPS push、CI 构建、assets 下载、registry 更新、远端验证。发布时自动加载。"
