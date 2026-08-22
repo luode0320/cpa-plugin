@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
@@ -12,8 +13,8 @@ import (
 // duplicate in-memory auth records for the same on-disk file.
 
 func sampleNestedAuthJSON(uid string) []byte {
-	return []byte(`{
-  "type": "workbuddy",
+	return []byte(fmt.Sprintf(`{
+  "type": %q,
   "auth": {
     "accessToken": "at",
     "refreshToken": "rt",
@@ -24,7 +25,7 @@ func sampleNestedAuthJSON(uid string) []byte {
     "uid": "` + uid + `",
     "nickname": "nick"
   }
-}`)
+}`, providerName))
 }
 
 func decodeParseAuth(t *testing.T, raw []byte) pluginapi.AuthParseResponse {

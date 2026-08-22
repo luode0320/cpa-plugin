@@ -75,7 +75,7 @@ import (
 )
 
 const (
-	providerName  = "workbuddy"
+	providerName  = "workbuddy-provider"
 	authFileName  = "workbuddy.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png"
 	// CN chat/auth gateway (iss = codebuddy.cn realm).
@@ -327,7 +327,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.9.5"
+var version = "0.9.6"
 
 func wbRegistration() registration {
 	return registration{

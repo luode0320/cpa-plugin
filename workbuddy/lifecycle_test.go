@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,7 +176,7 @@ func TestSafeWorkbuddyAuthPath(t *testing.T) {
 func TestDeleteAuthFile_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "workbuddy-x.json")
-	if err := os.WriteFile(p, []byte(`{"type":"workbuddy"}`), 0o600); err != nil {
+	if err := os.WriteFile(p, []byte(fmt.Sprintf(`{"type":%q}`, providerName)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := deleteAuthFileAt(p); err != nil {
@@ -349,12 +350,12 @@ func TestMergeAuthDoc_PreservesTopLevel(t *testing.T) {
 		Auth:    storedTokens{AccessToken: "at-new", RefreshToken: "rt-new", ExpiresAt: 42, Domain: "www.codebuddy.cn"},
 		Account: storedAccount{UID: "u1", EnterpriseID: "e1", Nickname: "nick"},
 	}
-	raw, err := mergeAuthDoc([]byte(`{
-		"type":"workbuddy","provider":"workbuddy","logo":"https://x/logo.png",
+	raw, err := mergeAuthDoc([]byte(fmt.Sprintf(`{
+		"type":%q,"provider":%q,"logo":"https://x/logo.png",
 		"disabled":true,"note":"CN · 手动禁用","manual_disable":true,
 		"auth":{"accessToken":"at-old","refreshToken":"rt-old","expiresAt":1,"domain":"www.codebuddy.cn"},
 		"account":{"uid":"u1","enterpriseId":"e1","nickname":"nick"}
-	}`), sa)
+	}`, providerName, providerName)), sa)
 	if err != nil {
 		t.Fatal(err)
 	}

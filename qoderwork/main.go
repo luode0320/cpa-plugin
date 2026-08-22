@@ -74,7 +74,7 @@ import (
 )
 
 const (
-	providerName  = "qoderwork"
+	providerName  = "qoderwork-provider"
 	authFileName  = "qoderwork.json"
 	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/QoderWork.png"
 	// QoderWork CN: OpenAPI for auth/billing, gateway for COSY-signed inference.

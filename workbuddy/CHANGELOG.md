@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.6
+
+### Rename — plugin `id` `workbuddy` → `workbuddy-provider`
+
+Cpa 客户端按 `providerName` 常量显示插件侧栏名字；按 `<id>.so/.dylib/.dll`
+加载插件身份。这次 id 改名后，老 plugin（如 `workbuddy.so`）仍可在侧栏共存，
+但 `管理 → 安装` 列表里看到的是新插件 `WorkBuddy Provider`。
+
+- `workbuddy/main.go: providerName` 由 `"workbuddy"` 改为 `"workbuddy-provider"`
+- `var version` / `VERSION`：0.9.5 → **0.9.6**
+- `registry.json`：plugin id 同步改为 `workbuddy-provider`
+- build.yml 发布矩阵同步改为 `id: workbuddy-provider`
+- 配套：`qoderwork` 0.2.7 → **0.2.8** （id `qoderwork-provider`）、`token-usage-tracker`
+  0.1.6 → **0.1.7** （id `workbuddy-token-usage`）
+
 ## 0.9.5
 
 ### Rename — 插件显示名 `WorkBuddy` → `WorkBuddy Provider`

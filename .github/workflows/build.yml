@@ -1,13 +1,18 @@
-# Multi-arch CPA plugin build & release (workbuddy + qoderwork + token-usage-tracker).
+# Multi-arch CPA plugin build & release (3 plugins under cpa-workbuddy-plugin).
+# Plugin sources live in <src>/ (workbuddy/, qoderwork/, token-usage-tracker/);
+# plugin identity (`id`) is the cpa-facing plugin id and may differ from the
+# source directory name (binary filename = <id>.<so|dylib|dll>, zip filename =
+# <id>_<version>_<goos>_<goarch>.zip).
+#
 # Each plugin versions INDEPENDENTLY:
-#   - tag 'workbuddy-v*'  → release workbuddy at that version
-#   - tag 'qoderwork-v*'  → release qoderwork at that version
-#   - tag 'token-usage-tracker-v*' → release token-usage-tracker at that version
-#   - workflow_dispatch   → pick plugin + version manually
-#   - plain push/PR       → CI builds for both (artifacts only, no release)
+#   - tag 'workbuddy-provider-v*'           → release workbuddy-provider at that version
+#   - tag 'qoderwork-provider-v*'           → release qoderwork-provider at that version
+#   - tag 'workbuddy-token-usage-v*'        → release workbuddy-token-usage at that version
+#   - workflow_dispatch                       → pick plugin + version manually
+#   - plain push/PR                          → CI builds for all (artifacts only, no release)
 #
 # Asset naming matches CLIProxyAPI pluginstore ArchiveName():
-#   <id>_<version>_<goos>_<goarch>.zip   (zip root: <id>.so|.dylib|.dll)
+#   <id>_<version>_<goos>_<goarch>.zip     (zip root: <id>.so|.dylib|.dll)
 
 name: Build
 
@@ -15,14 +20,17 @@ on:
   pull_request:
   push:
     branches: [main]
-    tags: ["workbuddy-v*", "qoderwork-v*", "token-usage-tracker-v*"]
+    tags:
+      - "workbuddy-provider-v*"
+      - "qoderwork-provider-v*"
+      - "workbuddy-token-usage-v*"
   workflow_dispatch:
     inputs:
       plugin:
         description: "Plugin to release"
         required: true
         type: choice
-        options: [workbuddy, qoderwork, token-usage-tracker]
+        options: [workbuddy-provider, qoderwork-provider, workbuddy-token-usage]
       version:
         description: "Version without v (empty = plugin's VERSION file)"
         required: false
@@ -67,80 +75,95 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # workbuddy native
-          - id: workbuddy
+          # workbuddy-provider native (sources in workbuddy/)
+          - id: workbuddy-provider
+            src: workbuddy
             goos: linux
             goarch: amd64
             runner: ubuntu-24.04
             ext: so
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             goos: linux
             goarch: arm64
             runner: ubuntu-24.04-arm
             ext: so
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             goos: darwin
             goarch: amd64
             runner: macos-15-intel
             ext: dylib
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             goos: darwin
             goarch: arm64
             runner: macos-15
             ext: dylib
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             goos: windows
             goarch: amd64
             runner: windows-2025
             ext: dll
-          # qoderwork native
-          - id: qoderwork
+          # qoderwork-provider native (sources in qoderwork/)
+          - id: qoderwork-provider
+            src: qoderwork
             goos: linux
             goarch: amd64
             runner: ubuntu-24.04
             ext: so
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             goos: linux
             goarch: arm64
             runner: ubuntu-24.04-arm
             ext: so
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             goos: darwin
             goarch: amd64
             runner: macos-15-intel
             ext: dylib
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             goos: darwin
             goarch: arm64
             runner: macos-15
             ext: dylib
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             goos: windows
             goarch: amd64
             runner: windows-2025
             ext: dll
-          # token-usage-tracker native
-          - id: token-usage-tracker
+          # workbuddy-token-usage native (sources in token-usage-tracker/)
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             goos: linux
             goarch: amd64
             runner: ubuntu-24.04
             ext: so
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             goos: linux
             goarch: arm64
             runner: ubuntu-24.04-arm
             ext: so
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             goos: darwin
             goarch: amd64
             runner: macos-15-intel
             ext: dylib
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             goos: darwin
             goarch: arm64
             runner: macos-15
             ext: dylib
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             goos: windows
             goarch: amd64
             runner: windows-2025
@@ -148,26 +171,27 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: ${{ matrix.id }}
+        working-directory: ${{ matrix.src }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ matrix.id }}/go.mod
-          cache-dependency-path: ${{ matrix.id }}/go.sum
+          go-version-file: ${{ matrix.src }}/go.mod
+          cache-dependency-path: ${{ matrix.src }}/go.sum
 
       - name: Resolve release metadata
         working-directory: .
         run: |
           set -euo pipefail
           PLUGIN="${{ matrix.id }}"
+          SRC="${{ matrix.src }}"
           # Version resolution: tag of this plugin > dispatch input > VERSION file
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == ${PLUGIN}-v* ]]; then
             VERSION="${GITHUB_REF_NAME#${PLUGIN}-v}"
           elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.plugin }}" == "${PLUGIN}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="$(tr -d ' \n\r' < ${PLUGIN}/VERSION)"
+            VERSION="$(tr -d ' \n\r' < ${SRC}/VERSION)"
             # CI builds (non-release) get a +ci suffix to avoid clashing with real versions
             if [[ "${GITHUB_REF_TYPE:-}" != "tag" && "${{ github.event_name }}" != "workflow_dispatch" ]]; then
               VERSION="${VERSION}+ci.${GITHUB_RUN_NUMBER}"
@@ -187,7 +211,7 @@ jobs:
             go build -trimpath -buildmode=c-shared \
               -ldflags "-s -w -X main.version=${VERSION}" \
               -o "dist/${LIB_NAME}" .
-          rm -f "dist/${{ matrix.id }}.h" dist/*.h || true
+          rm -f "dist/${PLUGIN}.h" dist/*.h || true
           file "dist/${LIB_NAME}" || true
 
       - name: Package plugin (CPA ArchiveName)
@@ -195,7 +219,7 @@ jobs:
         run: |
           set -euo pipefail
           go run ./.github/scripts/package-release.go \
-            -library "${{ matrix.id }}/dist/${LIB_NAME}" \
+            -library "${{ matrix.src }}/dist/${LIB_NAME}" \
             -archive "${ARCHIVE_NAME}" \
             -checksum "${ARCHIVE_NAME}.sha256"
           python3 - <<'PY'
@@ -226,22 +250,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             target: windows-arm64
             ext: dll
-          - id: workbuddy
+          - id: workbuddy-provider
+            src: workbuddy
             target: freebsd-amd64
             ext: so
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             target: windows-arm64
             ext: dll
-          - id: qoderwork
+          - id: qoderwork-provider
+            src: qoderwork
             target: freebsd-amd64
             ext: so
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             target: windows-arm64
             ext: dll
-          - id: token-usage-tracker
+          - id: workbuddy-token-usage
+            src: token-usage-tracker
             target: freebsd-amd64
             ext: so
     defaults:
@@ -251,25 +281,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: ${{ matrix.id }}/go.mod
-          cache-dependency-path: ${{ matrix.id }}/go.sum
+          go-version-file: ${{ matrix.src }}/go.mod
+          cache-dependency-path: ${{ matrix.src }}/go.sum
 
       - name: Resolve release metadata
         id: meta
         run: |
           set -euo pipefail
           PLUGIN="${{ matrix.id }}"
+          SRC="${{ matrix.src }}"
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" && "${GITHUB_REF_NAME}" == ${PLUGIN}-v* ]]; then
             VERSION="${GITHUB_REF_NAME#${PLUGIN}-v}"
           elif [ -n "${{ github.event.inputs.version }}" ] && [ "${{ github.event.inputs.plugin }}" == "${PLUGIN}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           else
-            VERSION="$(tr -d ' \n\r' < ${PLUGIN}/VERSION)"
+            VERSION="$(tr -d ' \n\r' < ${SRC}/VERSION)"
           fi
           CLEAN_VERSION="${VERSION%%+*}"
           GOOS_PART="${{ matrix.target }}"
           echo "VERSION=${CLEAN_VERSION}" >> "${GITHUB_ENV}"
-          echo "version=${CLEAN_VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "version=${CLEAN_VERSION}" >> "$GITHUB_OUTPUT"
           echo "ARCHIVE_NAME=${PLUGIN}_${CLEAN_VERSION}_${GOOS_PART%-*}_${GOOS_PART#*-}.zip" >> "${GITHUB_ENV}"
           echo "LIB_NAME=${PLUGIN}.${{ matrix.ext }}" >> "${GITHUB_ENV}"
 
@@ -279,7 +310,7 @@ jobs:
         env:
           GOFLAGS: -trimpath -buildmode=c-shared
         with:
-          dir: ${{ matrix.id }}
+          dir: ${{ matrix.src }}
           packages: .
           targets: ${{ matrix.target }}
           out-dir: dist/${{ matrix.target }}
@@ -290,12 +321,12 @@ jobs:
       - name: Package plugin
         run: |
           set -euo pipefail
-          rm -f go-cross-bin.h "${{ matrix.id }}/dist/${{ matrix.target }}/${{ matrix.id }}.h" || true
+          rm -f go-cross-bin.h "${{ matrix.src }}/dist/${{ matrix.target }}/${PLUGIN}.h" || true
           LIB=""
           for p in \
-            "${{ matrix.id }}/dist/${{ matrix.target }}/${LIB_NAME}" \
+            "${{ matrix.src }}/dist/${{ matrix.target }}/${LIB_NAME}" \
             "dist/${{ matrix.target }}/${LIB_NAME}" \
-            "${{ matrix.id }}/dist/${LIB_NAME}"; do
+            "${{ matrix.src }}/dist/${LIB_NAME}"; do
             if [ -f "$p" ]; then LIB="$p"; break; fi
           done
           if [ -z "$LIB" ]; then
@@ -321,9 +352,9 @@ jobs:
     # Only for a tag of a specific plugin, or dispatch with a version.
     if: >-
       (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
-      startsWith(github.ref, 'refs/tags/workbuddy-v') ||
-      startsWith(github.ref, 'refs/tags/qoderwork-v') ||
-      startsWith(github.ref, 'refs/tags/token-usage-tracker-v')
+      startsWith(github.ref, 'refs/tags/workbuddy-provider-v') ||
+      startsWith(github.ref, 'refs/tags/qoderwork-provider-v') ||
+      startsWith(github.ref, 'refs/tags/workbuddy-token-usage-v')
     needs:
       - build
       - build-cross
@@ -340,12 +371,12 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             P="${{ github.event.inputs.plugin }}"
             V="${{ github.event.inputs.version }}"
-          elif [[ "${GITHUB_REF_NAME}" == workbuddy-v* ]]; then
-            P="workbuddy"; V="${GITHUB_REF_NAME#workbuddy-v}"
-          elif [[ "${GITHUB_REF_NAME}" == qoderwork-v* ]]; then
-            P="qoderwork"; V="${GITHUB_REF_NAME#qoderwork-v}"
+          elif [[ "${GITHUB_REF_NAME}" == workbuddy-provider-v* ]]; then
+            P="workbuddy-provider"; V="${GITHUB_REF_NAME#workbuddy-provider-v}"
+          elif [[ "${GITHUB_REF_NAME}" == qoderwork-provider-v* ]]; then
+            P="qoderwork-provider"; V="${GITHUB_REF_NAME#qoderwork-provider-v}"
           else
-            P="token-usage-tracker"; V="${GITHUB_REF_NAME#token-usage-tracker-v}"
+            P="workbuddy-token-usage"; V="${GITHUB_REF_NAME#workbuddy-token-usage-v}"
           fi
           echo "plugin=$P" >> "$GITHUB_OUTPUT"
           echo "version=$V" >> "$GITHUB_OUTPUT"
@@ -404,6 +435,17 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
           set -euo pipefail
+          # Display name mapping so the GitHub Release title uses the human-readable
+          # plugin display name (e.g. "WorkBuddy Provider") rather than the cpa id
+          # ("workbuddy-provider"). Kept here because it's only consumed by gh
+          # release's --title flag and never re-used in the plugin binary.
+          DISPLAY=""
+          case "${PLUGIN}" in
+            workbuddy-provider)    DISPLAY="WorkBuddy Provider" ;;
+            qoderwork-provider)    DISPLAY="QoderWork Provider" ;;
+            workbuddy-token-usage) DISPLAY="WorkBuddy Token Usage" ;;
+          esac
+          TITLE="${DISPLAY:-$PLUGIN} v${VERSION}"
           if [[ "${GITHUB_REF_TYPE:-}" != "tag" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -413,9 +455,11 @@ jobs:
             fi
           fi
           NOTES=$(cat <<EOF
-          ## ${PLUGIN} CPA plugin v${VERSION}
+          ## ${DISPLAY:-$PLUGIN} CPA plugin v${VERSION}
 
           Multi-arch builds for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) plugin store (\`github-release\` install type).
+
+          Plugin id: \`${PLUGIN}\`
 
           ### Assets (pluginstore \`ArchiveName(id, version, goos, goarch)\`)
           | File | Contents |
@@ -446,6 +490,6 @@ jobs:
           else
             gh release create "${TAG}" out/${PLUGIN}_*.zip out/checksums.txt \
               --repo "${GITHUB_REPOSITORY}" \
-              --title "${PLUGIN} v${VERSION}" \
+              --title "${TITLE}" \
               --notes "${NOTES}"
           fi
