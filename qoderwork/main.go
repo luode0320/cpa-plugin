@@ -696,6 +696,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+		noteAccountFailure(req.AuthID, 0, err.Error())
 		return nil, fmt.Errorf("http_error: %w", err)
 	}
 	defer stream.Close()
@@ -713,6 +714,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	}
 	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
 	invalidateAccountCredits(req.AuthID, authUID)
+	resetAccountFailover(req.AuthID)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
 
@@ -775,10 +777,21 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		chunks, statusCode, errCollect := collectUpstreamStreamQoder(encodedBody, sa, upstreamModel, sseFramed, collector)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
+			// Unlike the workbuddy plugin, collectUpstreamStreamQoder does not
+			// run reconcileByUID internally — handle both cases here.
+			// statusCode==0 → transport failure, failover note only;
+			// statusCode>=400 → reconcileAfterExecutorError (records failover
+			// internally and applies the hard-credit lifecycle when relevant).
+			if statusCode == 0 {
+				noteAccountFailure(req.AuthID, 0, errCollect.Error())
+			} else {
+				reconcileAfterExecutorError(req.AuthID, statusCode, errCollect.Error())
+			}
 			return nil, errCollect
 		}
 		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
 		invalidateAccountCredits(req.AuthID, authUID)
+		resetAccountFailover(req.AuthID)
 		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
 	}
 

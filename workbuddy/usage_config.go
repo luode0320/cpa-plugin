@@ -66,6 +66,9 @@ func configure(raw []byte) {
 	nextSchedulerMode := schedulerModeSession
 	nextKeepaliveAuto := true
 	nextMgmtKey := ""
+	// failover default: enabled. Explicit account_failover: false disables the
+	// whole cooldown mechanism (pre-failover behavior).
+	nextFailoverEnabled := true
 
 	cfgURL, cfgKey := "", ""
 	if len(raw) > 0 {
@@ -83,6 +86,11 @@ func configure(raw []byte) {
 					v := strings.TrimSpace(strings.TrimPrefix(line, "lifecycle_auto:"))
 					v = strings.Trim(v, "\"'")
 					nextLifecycleAuto = v == "true" || v == "1" || v == "yes" || v == "on"
+				}
+				if strings.HasPrefix(line, "account_failover:") {
+					v := strings.TrimSpace(strings.TrimPrefix(line, "account_failover:"))
+					v = strings.Trim(v, "\"'")
+					nextFailoverEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
 				}
 				if strings.HasPrefix(line, "scheduler_mode:") {
 					v := strings.TrimSpace(strings.TrimPrefix(line, "scheduler_mode:"))
@@ -122,6 +130,8 @@ func configure(raw []byte) {
 	lifecycleAutoMu.Lock()
 	lifecycleAuto = nextLifecycleAuto
 	lifecycleAutoMu.Unlock()
+
+	setFailoverEnabled(nextFailoverEnabled)
 
 	schedulerModeMu.Lock()
 	schedulerMode = nextSchedulerMode

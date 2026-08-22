@@ -161,7 +161,7 @@ func headerSessionPrefix(header string) string {
 // sessionKey != "" → sticky session routing:
 //   - a fresh, still-usable binding is reused unchanged (1h stickiness);
 //   - a stale binding (expired) or a binding whose account became
-//     disabled/exhausted is re-assigned;
+//     disabled/exhausted/cooling-down is re-assigned;
 //   - new assignments prefer accounts with no live bindings, then round-robin
 //     across all usable accounts;
 //   - when every account is disabled/exhausted, the current pin is kept if the
@@ -182,7 +182,7 @@ func pickSessionAuth(sessionKey string, candidates []activeAuthCandidate) string
 	usableSet := make(map[string]struct{}, len(candidates))
 	for _, c := range candidates {
 		live[c.ID] = struct{}{}
-		if !c.Disabled && !c.Exhausted {
+		if !c.Disabled && !c.Exhausted && !isAccountCoolingDown(c.ID) {
 			usable = append(usable, c.ID)
 			usableSet[c.ID] = struct{}{}
 		}
@@ -202,8 +202,10 @@ func pickSessionAuth(sessionKey string, candidates []activeAuthCandidate) string
 	}
 
 	if len(usable) == 0 {
-		// Everything disabled/exhausted — keep current pin if the account still
-		// exists, else the first candidate (mirrors pickActiveAuth fallback).
+		// Everything disabled/exhausted/cooling-down — keep current pin if the
+		// account still exists, else the first candidate (mirrors pickActiveAuth
+		// fallback). Cooling-down accounts are still eligible here so a session
+		// keeps its pin rather than erroring out when every account is down.
 		if b, ok := sessionAuthBindings[sessionKey]; ok {
 			if _, isLive := live[b.AuthID]; isLive {
 				return b.AuthID
@@ -247,6 +249,26 @@ func pruneSessionBindings() {
 			delete(sessionAuthBindings, key)
 		}
 	}
+}
+
+// evictSessionBindingsForAuth removes every binding pinned to the given
+// account (regardless of expiry), so conversations stuck on a failing account
+// are re-assigned on the next pick. Returns the number of bindings removed.
+// Called when the account enters failover cooldown.
+func evictSessionBindingsForAuth(authID string) int {
+	if authID == "" {
+		return 0
+	}
+	sessionAuthMu.Lock()
+	defer sessionAuthMu.Unlock()
+	evicted := 0
+	for key, b := range sessionAuthBindings {
+		if b.AuthID == authID {
+			delete(sessionAuthBindings, key)
+			evicted++
+		}
+	}
+	return evicted
 }
 
 // clearSessionBindings wipes all session bindings. Test helper; never called

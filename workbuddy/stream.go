@@ -86,6 +86,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
+		noteAccountFailure(authID, 0, err.Error())
 		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
 		return
 	}
@@ -126,11 +127,13 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	// surface it as an error frame and record the attempt as failed.
 	if err := scanner.Err(); err != nil {
 		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error(), reasoningEffort, collector.ttftNS(started), accountLabel)
+		noteAccountFailure(authID, 0, err.Error())
 		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
 		return
 	}
 	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), accountLabel)
 	invalidateAccountCredits(authID, authUID)
+	resetAccountFailover(authID)
 }
 
 // collectUpstreamStream is the synchronous fallback (no async stream id): drain

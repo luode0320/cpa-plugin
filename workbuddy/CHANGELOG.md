@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.9.9
+
+### Feature — 账户级 Failover：429/耗尽自动切换（阶梯指数退避）
+
+会话粘性路由（scheduler_mode=session / credits）此前只认"耗尽/禁用"两种
+不可用状态：账户返回 429 等错误时被当作软限流直接忽略，同一会话的后续
+请求仍粘在同一个故障账户上，连续失败无法自动换账户。
+
+本次新增按账户的运行时失败计数 + cooldown（`accountFailover.go`）：
+
+- **阶梯指数退避**（按账户连续失败次数，成功一次即清零）：
+  - 1 次失败 → cooldown 1 分钟
+  - 2 次失败 → cooldown 3 分钟
+  - 3 次失败 → cooldown 10 分钟
+  - 4 次及以上 → 保持 10 分钟（封顶）
+- **计入失败**：HTTP 429、402、5xx、传输层错误（status 0）、body 含
+  rate limit / insufficient credit 等标记；**4xx 业务错误不计**。
+- **生效范围**：cooldown 期间，`scheduler.pick` 直接跳过该账户（任何会话
+  的新请求都路由到健康账户）；正在推理中的请求不中断；全账户 cooldown
+  时保留当前 pin（与全耗尽 fallback 语义一致），不 defer。
+- **会话粘性联动**：账户进入 cooldown 时 `evictSessionBindingsForAuth`
+  立即清除指向该账户的所有 session binding，同会话下一次 pick 自动重分配。
+- **成功即恢复**：该账户任何一次上游成功立即清零计数并解除 cooldown。
+- **不写 auth 文件**：cooldown 仅内存标记（进程重启即重置），与现有
+  lifecycle 的 disable/delete（402 硬耗尽）互不干扰。
+- **开关**：plugin config `account_failover: false` 可整体关闭，恢复旧行为
+  （默认开启）。
+- 错误路径统一经 `noteAccountFailure`（`lifecycle.go`）记录并异步回填
+  UID → auth.ID 规范键；`main.go` / `stream.go` 的传输层错误与同步流
+  错误分支均已接入。
+
 ## 0.9.8
 
 ### Fix — 插件面板"暂无 WorkBuddy 账号"（账号列表为空）

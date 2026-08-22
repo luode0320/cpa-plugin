@@ -68,7 +68,11 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 
-	// Collect qoderwork candidates only.
+	// Collect qoderwork candidates only. Accounts in failover cooldown are
+	// skipped so new requests route to a healthy account instead — but only
+	// when at least one healthy candidate remains. If EVERY qoderwork account
+	// is cooling down, keep the full list so the picker falls back to the
+	// current pin (mirrors the all-exhausted fallback) instead of deferring.
 	var wbCandidates []pluginapi.SchedulerAuthCandidate
 	for _, c := range req.Candidates {
 		if c.Provider != providerName {
@@ -81,6 +85,15 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 	}
 	if len(wbCandidates) == 0 {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+	}
+	filtered := make([]pluginapi.SchedulerAuthCandidate, 0, len(wbCandidates))
+	for _, c := range wbCandidates {
+		if !isAccountCoolingDown(c.ID) {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) > 0 {
+		wbCandidates = filtered
 	}
 
 	// Build thin view for active-auth picker.

@@ -345,3 +345,53 @@ func TestSchedulerPick_SessionMode_NoSessionFallsBackToPanel(t *testing.T) {
 		t.Fatalf("no-session request should fall back to panel account wb-b, got %+v", resp)
 	}
 }
+
+func TestPickSessionAuth_CoolingDownAccountReassigns(t *testing.T) {
+	resetSessionRouting(t)
+	resetFailover(t)
+	cands := []activeAuthCandidate{
+		{ID: "wb-a"}, {ID: "wb-b"},
+	}
+	// conv-1 pins wb-a, then wb-a enters failover cooldown.
+	first := pickSessionAuth("conv-1", cands)
+	if first == "" {
+		t.Fatal("first pick returned empty")
+	}
+	recordAccountFailure(first, 429, "rate limit exceeded")
+	if got := pickSessionAuth("conv-1", cands); got == first {
+		t.Fatalf("cooling-down pinned account should be re-assigned, stuck at %q", got)
+	}
+}
+
+func TestEvictSessionBindingsForAuth_RemovesAllBindings(t *testing.T) {
+	resetSessionRouting(t)
+	cands := []activeAuthCandidate{
+		{ID: "wb-a"}, {ID: "wb-b"},
+	}
+	pickSessionAuth("c1", cands)
+	pickSessionAuth("c2", cands)
+	pickSessionAuth("c3", cands)
+	// Count bindings pinned to wb-a before eviction.
+	sessionAuthMu.RLock()
+	pinned := 0
+	for _, b := range sessionAuthBindings {
+		if b.AuthID == "wb-a" {
+			pinned++
+		}
+	}
+	sessionAuthMu.RUnlock()
+	if pinned == 0 {
+		t.Fatal("expected at least one binding pinned to wb-a")
+	}
+	evicted := evictSessionBindingsForAuth("wb-a")
+	if evicted != pinned {
+		t.Fatalf("evicted %d bindings, want %d", evicted, pinned)
+	}
+	sessionAuthMu.RLock()
+	for key, b := range sessionAuthBindings {
+		if b.AuthID == "wb-a" {
+			t.Fatalf("binding %q still pinned to wb-a after eviction", key)
+		}
+	}
+	sessionAuthMu.RUnlock()
+}

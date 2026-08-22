@@ -51,10 +51,10 @@ type activeAuthCandidate struct {
 
 // pickActiveAuth chooses which qoderwork auth to use from host candidates.
 // The panel selection is sticky: it stays on the current account unless that
-// account is no longer in the candidate list (disabled/deleted by host) or
-// is marked exhausted in cache. When switching, it picks the first
-// non-exhausted candidate and updates activeAuthID so the panel reflects
-// the change on next dashboard load.
+// account is no longer in the candidate list (disabled/deleted by host),
+// is marked exhausted in cache, or is in failover cooldown. When switching,
+// it picks the first non-exhausted candidate and updates activeAuthID so the
+// panel reflects the change on next dashboard load.
 func pickActiveAuth(candidates []activeAuthCandidate) string {
 	if len(candidates) == 0 {
 		return ""
@@ -65,23 +65,24 @@ func pickActiveAuth(candidates []activeAuthCandidate) string {
 	}
 
 	cur := getActiveAuthID()
-	// Keep current selection if it's still a live candidate AND not disabled/exhausted.
+	// Keep current selection if it's still a live candidate AND not disabled/exhausted/cooling-down.
 	if cur != "" {
-		if c, ok := byID[cur]; ok && !c.Disabled && !c.Exhausted {
+		if c, ok := byID[cur]; ok && !c.Disabled && !c.Exhausted && !isAccountCoolingDown(cur) {
 			return cur
 		}
 	}
 
-	// Selection is gone, disabled or exhausted — pick next non-disabled non-exhausted, else first.
+	// Selection is gone, disabled, exhausted or cooling down — pick next
+	// non-disabled non-exhausted non-cooling-down, else first.
 	var next string
 	for _, c := range candidates {
-		if !c.Disabled && !c.Exhausted {
+		if !c.Disabled && !c.Exhausted && !isAccountCoolingDown(c.ID) {
 			next = c.ID
 			break
 		}
 	}
 	if next == "" {
-		// All exhausted or disabled — keep current if still alive, else first candidate.
+		// All exhausted/disabled/cooling-down — keep current if still alive, else first candidate.
 		if cur != "" {
 			if _, ok := byID[cur]; ok {
 				return cur
@@ -99,8 +100,8 @@ func pickActiveAuth(candidates []activeAuthCandidate) string {
 // Called from buildDashboardEx on every /accounts and /refresh request.
 //
 // Rules (single source of truth, same as pickActiveAuth):
-//  1. If current selection is live AND not exhausted → keep it.
-//  2. If current selection is exhausted → switch to first non-exhausted.
+//  1. If current selection is live AND not exhausted AND not cooling down → keep it.
+//  2. If current selection is exhausted or cooling down → switch to first non-exhausted.
 //  3. If current selection is gone (disabled/deleted) → switch to first available.
 //  4. If all exhausted → keep current if alive, else first.
 //
@@ -113,14 +114,14 @@ func ensureDefaultActiveAuth(accounts []wbAccount) string {
 		live[a.AuthID] = a
 	}
 
-	// Rule 1: current selection is live AND not exhausted → keep.
+	// Rule 1: current selection is live AND not exhausted AND not cooling down → keep.
 	if cur != "" {
-		if a, ok := live[cur]; ok && !a.Disabled && !a.Exhausted {
+		if a, ok := live[cur]; ok && !a.Disabled && !a.Exhausted && !isAccountCoolingDown(cur) {
 			return cur
 		}
 	}
 
-	// Rule 2 & 3: selection is exhausted or gone → find next.
+	// Rule 2 & 3: selection is exhausted, cooling down or gone → find next.
 	var firstAny, firstOK, firstReady string
 	for _, a := range accounts {
 		if firstAny == "" {
@@ -132,7 +133,7 @@ func ensureDefaultActiveAuth(accounts []wbAccount) string {
 		if firstOK == "" {
 			firstOK = a.AuthID
 		}
-		if !a.Exhausted && firstReady == "" {
+		if !a.Exhausted && !isAccountCoolingDown(a.AuthID) && firstReady == "" {
 			firstReady = a.AuthID
 		}
 	}

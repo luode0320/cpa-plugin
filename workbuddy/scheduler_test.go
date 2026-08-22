@@ -320,3 +320,65 @@ func TestEnsureDefaultActiveAuth_AllExhausted_KeepsCurrent(t *testing.T) {
 		t.Fatalf("all exhausted should keep a1, got %q", id)
 	}
 }
+
+func TestSchedulerPick_SkipsCoolingDownAccount(t *testing.T) {
+	resetActiveAuth(t)
+	resetFailover(t)
+	// Panel-selected wb-a is cooling down → pick must switch to wb-b.
+	setActiveAuthID("wb-a")
+	recordAccountFailure("wb-a", 429, "rate limit exceeded")
+	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
+		Provider: providerName,
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: "wb-a", Provider: providerName},
+			{ID: "wb-b", Provider: providerName},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	resp := parsePickResponse(t, raw)
+	if !resp.Handled || resp.AuthID != "wb-b" {
+		t.Fatalf("want switch to wb-b, got %+v", resp)
+	}
+	if getActiveAuthID() != "wb-b" {
+		t.Fatalf("active should update to wb-b, got %q", getActiveAuthID())
+	}
+}
+
+func TestSchedulerPick_AllCoolingDown_KeepsCurrent(t *testing.T) {
+	resetActiveAuth(t)
+	resetFailover(t)
+	// Every candidate cooling down → keep current pin rather than erroring.
+	setActiveAuthID("wb-a")
+	recordAccountFailure("wb-a", 429, "rate limit exceeded")
+	recordAccountFailure("wb-b", 429, "rate limit exceeded")
+	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
+		Provider: providerName,
+		Candidates: []pluginapi.SchedulerAuthCandidate{
+			{ID: "wb-a", Provider: providerName},
+			{ID: "wb-b", Provider: providerName},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	resp := parsePickResponse(t, raw)
+	if !resp.Handled || resp.AuthID != "wb-a" {
+		t.Fatalf("all cooling down should keep wb-a, got %+v", resp)
+	}
+}
+
+func TestEnsureDefaultActiveAuth_SkipsCoolingDown(t *testing.T) {
+	resetActiveAuth(t)
+	resetFailover(t)
+	setActiveAuthID("a1")
+	recordAccountFailure("a1", 429, "rate limit exceeded")
+	id := ensureDefaultActiveAuth([]wbAccount{
+		{AuthIndex: "a1", AuthID: "a1", Exhausted: false},
+		{AuthIndex: "a2", AuthID: "a2", Exhausted: false},
+	})
+	if id != "a2" {
+		t.Fatalf("want switch to a2 (a1 cooling down), got %q", id)
+	}
+}

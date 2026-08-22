@@ -413,17 +413,45 @@ func reconcileAllAccounts(force bool) []map[string]any {
 	return out
 }
 
+// noteAccountFailure records an upstream failure against the account and,
+// when it enters failover cooldown, evicts every session binding pinned to it
+// so new requests route elsewhere. The executor AuthID is normally the same
+// auth.ID the scheduler keys on, but legacy hosts may pass the account UID
+// instead; a background resolve backfills the canonical key so pick still
+// skips the account. Returns true when the failure was counted.
+func noteAccountFailure(authID string, status int, body string) bool {
+	if !failoverActive() || strings.TrimSpace(authID) == "" {
+		return false
+	}
+	if !recordAccountFailure(authID, status, body) {
+		return false
+	}
+	evictSessionBindingsForAuth(authID)
+	go func() {
+		_, id := resolveAuthIndexAndID(authID)
+		if id == "" || id == authID {
+			return
+		}
+		if recordAccountFailure(id, status, body) {
+			evictSessionBindingsForAuth(id)
+		}
+	}()
+	return true
+}
+
 // reconcileAfterExecutorError triggers lifecycle when upstream reports hard credit failure.
 // AuthID from the executor may be the credential ID (UID) rather than runtime auth_index;
 // we resolve via host.auth.list when direct get fails.
 func reconcileAfterExecutorError(authID string, status int, body string) {
-	if !lifecycleEnabled() || strings.TrimSpace(authID) == "" {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
 		return
 	}
-	if isSoftRateLimit(status, body) && !isHardCreditError(status, body) {
-		return
-	}
-	if !isHardCreditError(status, body) {
+	// Failover first — independent of lifecycle_auto: any upstream failure
+	// (429/402/5xx/transport) counts toward cooldown and evicts bindings.
+	noteAccountFailure(authID, status, body)
+	// Hard credit errors additionally trigger the disable/delete lifecycle.
+	if !lifecycleEnabled() || !isHardCreditError(status, body) {
 		return
 	}
 	go func() {
@@ -485,10 +513,14 @@ func resolveAuthIndexAndID(authID string) (string, string) {
 // reconcileByUID finds workbuddy auth by account UID and applies executor-error lifecycle.
 func reconcileByUID(uid string, status int, body string) {
 	uid = strings.TrimSpace(uid)
-	if uid == "" || !lifecycleEnabled() {
+	if uid == "" {
 		return
 	}
-	if !isHardCreditError(status, body) {
+	// Failover first — independent of lifecycle_auto. reconcileByUID receives
+	// the account UID; noteAccountFailure resolves it to the auth.ID key the
+	// scheduler uses and evicts bindings when cooldown triggers.
+	noteAccountFailure(uid, status, body)
+	if !lifecycleEnabled() || !isHardCreditError(status, body) {
 		return
 	}
 	idx, id := resolveAuthIndexAndID(uid)
