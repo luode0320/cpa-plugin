@@ -76,6 +76,14 @@ func configure(raw []byte) {
 	nextPreserveInterval := preserveWatchdogIntervalDefault
 	nextPreserveEnabled := preserveWatchdogEnabledDefault
 
+	// retry_on_4xx: per-request account-failover budget. Applied ONLY when
+	// the key is present in config_yaml: a valid value is clamped to
+	// [0, 5] and applied; an unparseable value resets to the default 3.
+	// An absent key keeps the current budget so an unrelated reconfigure
+	// never silently lifts a `retry_on_4xx: 0` kill switch.
+	nextRetryOn4xx := retryOn4xxDefault
+	retryOn4xxSeen := false
+
 	cfgURL, cfgKey := "", ""
 	if len(raw) > 0 {
 		var req struct {
@@ -147,6 +155,12 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					nextPreserveEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
 				}
+				if strings.HasPrefix(line, "retry_on_4xx:") {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine(line); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					}
+				}
 			}
 		}
 	}
@@ -193,6 +207,14 @@ func configure(raw []byte) {
 	// badge still show the old state?" UX gap). Reconfigure storms collapse
 	// onto one tick via requestPreserveTick's buffered chan cap 1.
 	requestPreserveTick()
+
+	// Per-request retry-on-4xx budget: applied under its own lock so
+	// executor loops reading it (loadedRetryOn4xx) stay atomic. Only when
+	// the key was present — absent keeps the current budget (kill-switch
+	// safety).
+	if retryOn4xxSeen {
+		setRetryOn4xx(nextRetryOn4xx)
+	}
 
 	// Shared usage feed for the standalone token-usage-tracker plugin.
 	// Parses usage_feed_* fields from the same config_yaml. Non-fatal by

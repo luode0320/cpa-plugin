@@ -61,7 +61,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -683,39 +682,106 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("body build: %w", err)
 	}
 	encodedBody := qoderEncode(body)
+
+	// Per-request account-failover loop. We try the prepared body against
+	// the configured account first; on an account-level 4xx
+	// (401/403/404/405) we rebuild against the next candidate up to
+	// retry_on_4xx times. publishUsage / resetAccountFailover / etc. must
+	// run against the credential that actually served the request, so
+	// we keep (usedSA, usedAuthID) in lockstep with the chosen account.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	var (
+		completion    []byte
+		completionErr error
+		usedAuthID    = req.AuthID
+	)
+	for attempt := 0; attempt <= budget; attempt++ {
+		completion, completionErr = doExecuteOnceQoder(encodedBody, curSA, upstreamModel, req.Model)
+		if completionErr == nil {
+			// Resolve the scheduler-level ID used by noteAccountFailure /
+			// reset bookkeeping: access token first, UID fallback.
+			usedAuthID = strings.TrimSpace(curSA.Auth.AccessToken)
+			if usedAuthID == "" {
+				usedAuthID = strings.TrimSpace(curSA.Account.UID)
+			}
+			break
+		}
+		// Decide whether to retry on the next account. We re-classify
+		// the surfaced upstream N (doExecuteOnceQoder encoded it via the
+		// standard "upstream N:" prefix). Business 400 is request-shaped
+		// and would fail identically on every account; 5xx/0/429/402 are
+		// surfaced immediately (cooldown handles long-term failure).
+		statusCode := parseUpstreamStatusFromErr(completionErr)
+		if !isAccountLevel4xx(statusCode) || attempt >= budget || curSA == nil {
+			break
+		}
+		currentID := strings.TrimSpace(curSA.Auth.AccessToken)
+		if currentID == "" {
+			currentID = strings.TrimSpace(curSA.Account.UID)
+		}
+		_, nextSA, hasNext := pickNextAuth(currentID)
+		if !hasNext || nextSA == nil {
+			break
+		}
+		curSA = nextSA
+		// Keep the failover/credit bookkeeping ID in lockstep with the
+		// account that will actually serve the next attempt.
+		usedAuthID = strings.TrimSpace(curSA.Auth.AccessToken)
+		if usedAuthID == "" {
+			usedAuthID = strings.TrimSpace(curSA.Account.UID)
+		}
+	}
+	if completionErr != nil {
+		// After exhausting retries (or a non-account-level error), mirror
+		// the historical accounting path: note the failure on the LAST
+		// account actually contacted and propagate the error.
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, parseUpstreamStatusFromErr(completionErr), completionErr.Error())
+		reconcileAfterExecutorError(usedAuthID, parseUpstreamStatusFromErr(completionErr), completionErr.Error())
+		if parseUpstreamStatusFromErr(completionErr) == 0 {
+			noteAccountFailure(usedAuthID, 0, completionErr.Error())
+		}
+		return nil, completionErr
+	}
+	// Success path: credit invalidation + failover counter reset use
+	// the actual account that served the request.
+	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
+	invalidateAccountCredits(usedAuthID, authUID)
+	resetAccountFailover(usedAuthID)
+	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+}
+
+// doExecuteOnceQoder performs exactly one synchronous execute against sa:
+// build the request, sign it with COSY, route via host.http.do_stream, then
+// fold the QoderWork nested SSE into a chat.completion payload. Pulled out
+// of handleExecExecute so the retry loop can rebuild the request against a
+// different account on failure. Returns a non-nil error in the canonical
+// "upstream N: ..." or "http_error: ..." shape that
+// parseUpstreamStatusFromErr understands.
+func doExecuteOnceQoder(encodedBody string, sa *storedAuth, upstreamModel, requestedModel string) ([]byte, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChat, strings.NewReader(encodedBody))
 	if err != nil {
 		return nil, err
 	}
 	if err := applyCosyHeaders(httpReq, sa, encodedBody, endpointChat, upstreamModel, true); err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "cosy: "+err.Error())
 		return nil, fmt.Errorf("cosy: %w", err)
 	}
 	// Compliance: route via host.http.do_stream so request-log captures the
 	// outbound call. Read entire body via the bridge, then fold SSE → completion.
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		noteAccountFailure(req.AuthID, 0, err.Error())
 		return nil, fmt.Errorf("http_error: %w", err)
 	}
 	defer stream.Close()
 	reader := newHostStreamReader(stream)
 	if statusCode >= 400 {
-		payload, _ := io.ReadAll(reader)
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
-		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
-		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
+		payload := readAllUpstreamErr(reader)
+		if sa != nil && sa.Account.UID != "" {
+			go reconcileByUID(sa.Account.UID, statusCode, payload)
+		}
+		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(payload, 200))
 	}
-	completion, err := aggregateQoderSSE(reader, req.Model)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		return nil, err
-	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
-	invalidateAccountCredits(req.AuthID, authUID)
-	resetAccountFailover(req.AuthID)
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+	return aggregateQoderSSE(reader, requestedModel)
 }
 
 // stripProviderPrefix removes the leading "qoder/" (or any "<provider>/")

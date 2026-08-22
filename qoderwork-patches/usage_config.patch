@@ -1,0 +1,39 @@
+diff --git a/qoderwork/usage_config.go b/qoderwork/usage_config.go
+index b1bdd33..6323e0f 100644
+--- a/qoderwork/usage_config.go
++++ b/qoderwork/usage_config.go
+@@ -76,6 +76,11 @@ func configure(raw []byte) {
+ 	nextPreserveInterval := preserveWatchdogIntervalDefault
+ 	nextPreserveEnabled := preserveWatchdogEnabledDefault
+ 
++	// retry_on_4xx: per-request account-failover budget. Default 3 when
++	// absent from config_yaml (also enforced when parsing fails or the
++	// value is out of [0, 5]).
++	nextRetryOn4xx := retryOn4xxDefault
++
+ 	cfgURL, cfgKey := "", ""
+ 	if len(raw) > 0 {
+ 		var req struct {
+@@ -147,6 +152,11 @@ func configure(raw []byte) {
+ 					v = strings.Trim(v, "\"'")
+ 					nextPreserveEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
+ 				}
++				if strings.HasPrefix(line, "retry_on_4xx:") {
++					if n, ok := parseRetryOn4xxLine(line); ok {
++						nextRetryOn4xx = clampRetryOn4xx(n)
++					}
++				}
+ 			}
+ 		}
+ 	}
+@@ -187,6 +197,10 @@ func configure(raw []byte) {
+ 	// take effect at the next tick without restarting the goroutine.
+ 	setPreserveConfig(nextPreserveThreshold, nextPreserveInterval, nextPreserveEnabled)
+ 
++	// Per-request retry-on-4xx budget: applied under its own lock so
++	// executor loops reading it (loadedRetryOn4xx) stay atomic.
++	setRetryOn4xx(nextRetryOn4xx)
++
+ 	// Shared usage feed for the standalone token-usage-tracker plugin.
+ 	// Parses usage_feed_* fields from the same config_yaml. Non-fatal by
+ 	// design: a failure only disables the feed, never chat.

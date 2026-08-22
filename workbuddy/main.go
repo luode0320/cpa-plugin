@@ -62,7 +62,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -337,7 +336,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.12.2"
+var version = "0.13.0"
 
 func wbRegistration() registration {
 	return registration{
@@ -701,42 +700,75 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// ensureSystemMessage + rewriteModel in ONE unmarshal/marshal pass.
 	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
 	reasoningEffort := reasoningEffortFromBody(body)
-	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	backendHeaders(httpReq, sa)
-	// Compliance: route via host.http.do_stream so request-log captures the
-	// outbound call. Read entire body via the bridge, then fold SSE → completion.
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
-		noteAccountFailure(req.AuthID, 0, err.Error())
-		return nil, fmt.Errorf("http_error: %w", err)
-	}
-	defer stream.Close()
-	reader := newHostStreamReader(stream)
-	if statusCode >= 400 {
-		payload, _ := io.ReadAll(reader)
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload), reasoningEffort, 0, accountLabel)
-		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
-		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
-	}
-	var firstByteAt time.Time
-	completion, err := aggregateCompletion(reader, req.Model, &firstByteAt)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
-		return nil, err
-	}
-	ttftNS := uint64(0)
-	if !firstByteAt.IsZero() {
-		if d := firstByteAt.Sub(started); d > 0 {
-			ttftNS = uint64(d)
+
+	// Per-request account-failover loop. We try the prepared body against
+	// the configured account first; on an account-level 4xx
+	// (401/403/404/405) we rebuild against the next candidate up to
+	// retry_on_4xx times. publishUsage / resetAccountFailover / etc. must
+	// run against the credential that actually served the request, so
+	// we keep (usedSA, usedBody) in lockstep with the chosen account.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curBody := body
+	var (
+		completion    []byte
+		completionErr error
+		usedAuthID    = req.AuthID
+	)
+	for attempt := 0; attempt <= budget; attempt++ {
+		completion, completionErr = doExecuteOnce(curBody, curSA, req.Model)
+		if completionErr == nil {
+			authUID = curSA.Account.UID
+			accountLabel = strings.TrimSpace(curSA.Account.Nickname)
+			if accountLabel == "" {
+				accountLabel = authUID
+			}
+			// Resolve the scheduler-level ID used by noteAccountFailure / reset
+			// bookkeeping. Same heuristic as collectUpstreamStream.
+			usedAuthID = strings.TrimSpace(curSA.Auth.AccessToken)
+			if usedAuthID == "" {
+				usedAuthID = strings.TrimSpace(curSA.Account.UID)
+			}
+			break
 		}
+		// Decide whether to retry on the next account. We re-classify
+		// the surfaced upstream N (doExecuteOnce encoded it via the
+		// standard "upstream N:" prefix).
+		statusCode := parseUpstreamStatusFromErr(completionErr)
+		if !isAccountLevel4xx(statusCode) || attempt >= budget || curSA == nil {
+			break
+		}
+		currentID := strings.TrimSpace(curSA.Auth.AccessToken)
+		if currentID == "" {
+			currentID = strings.TrimSpace(curSA.Account.UID)
+		}
+		_, nextSA, hasNext := pickNextAuth(currentID)
+		if !hasNext || nextSA == nil {
+			break
+		}
+		curSA = nextSA
+		// Re-prepare against the new account's stored identity so any
+		// per-account tool/schema/system rules apply. body itself
+		// stays byte-identical w.r.t. the user's intent.
+		curBody = prepareUpstreamBody(req.Payload, req.OriginalRequest, curSA, upstreamModel)
+		reasoningEffort = reasoningEffortFromBody(curBody)
 	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, ttftNS, accountLabel)
-	invalidateAccountCredits(req.AuthID, authUID)
-	resetAccountFailover(req.AuthID)
+	if completionErr != nil {
+		// After exhausting retries (or a non-account-level error), mirror
+		// the historical accounting path: note the failure on the LAST
+		// account actually contacted and propagate the error.
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, parseUpstreamStatusFromErr(completionErr), completionErr.Error(), reasoningEffort, 0, accountLabel)
+		reconcileAfterExecutorError(usedAuthID, parseUpstreamStatusFromErr(completionErr), completionErr.Error())
+		if parseUpstreamStatusFromErr(completionErr) == 0 {
+			noteAccountFailure(usedAuthID, 0, completionErr.Error())
+		}
+		return nil, completionErr
+	}
+	// Success path: credit invalidation + failover counter reset use
+	// the actual account that served the request.
+	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, 0, accountLabel)
+	invalidateAccountCredits(usedAuthID, authUID)
+	resetAccountFailover(usedAuthID)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
 

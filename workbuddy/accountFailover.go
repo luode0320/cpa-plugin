@@ -20,6 +20,7 @@
 package main
 
 import (
+	"net/http"
 	"sync"
 	"time"
 )
@@ -92,14 +93,37 @@ func failoverCooldownFor(count int) time.Duration {
 
 // isAccountFailure reports whether an upstream response counts as an account
 // failure for failover purposes. Transport-level failures (status 0), 5xx,
-// rate limiting (429 / body markers) and hard credit errors all count.
-// Business 4xx (e.g. 400 invalid request) is excluded: it reflects the
-// request, not the account.
+// rate limiting (429 / body markers), hard credit errors and account-level
+// 4xx (401/403/404/405 — wrong token, missing permission, endpoint or
+// method not available for THIS account) all count. Business 4xx (400) is
+// excluded: it reflects the request, not the account.
 func isAccountFailure(status int, body string) bool {
 	if status == 0 || status >= 500 {
 		return true
 	}
-	return isSoftRateLimit(status, body) || isHardCreditError(status, body)
+	if isSoftRateLimit(status, body) || isHardCreditError(status, body) {
+		return true
+	}
+	return isAccountLevel4xx(status)
+}
+
+// isAccountLevel4xx reports whether a 4xx status reflects an account-level
+// problem (the credential/endpoint on this account is wrong) rather than a
+// request-level problem. 401/403/404/405 mean the upstream rejected access
+// for THIS account: token expired, no permission, route missing, or method
+// not allowed. Retrying with a different account has a real chance of
+// succeeding. 400 is intentionally excluded — it almost always means the
+// request body was malformed by us and would fail identically on every
+// other account.
+func isAccountLevel4xx(status int) bool {
+	switch status {
+	case http.StatusUnauthorized, // 401
+		http.StatusForbidden,        // 403
+		http.StatusNotFound,         // 404
+		http.StatusMethodNotAllowed: // 405
+		return true
+	}
+	return false
 }
 
 // recordAccountFailure increments the consecutive-failure counter for the

@@ -89,69 +89,128 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 		defer cancel()
 	}
 
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		noteAccountFailure(authID, 0, err.Error())
-		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
-		return
+	// Per-request account-failover budget. 0 means no retry (kill switch
+	// via `retry_on_4xx: 0` in plugin.yaml). Hot path is unchanged when
+	// the budget is 0 — we still go through one attempt and propagate.
+	budget := loadedRetryOn4xx()
+	curReq := httpReq
+	curAuthID := authID
+	curAuthUID := authUID
+
+	// Snapshot the encoded body once: it is account-independent and every
+	// retry re-signs the SAME body via applyCosyHeaders for the new
+	// account. The stream path builds httpReq with strings.NewReader, so
+	// GetBody is populated automatically. If we cannot recover the body
+	// for some reason, account-switch retries are disabled (encodedBody
+	// == "") but the first attempt still runs normally.
+	encodedBody := ""
+	if httpReq.GetBody != nil {
+		if rc, berr := httpReq.GetBody(); berr == nil {
+			if b, rerr := io.ReadAll(rc); rerr == nil {
+				encodedBody = string(b)
+			}
+		}
 	}
-	defer stream.Close()
-	if statusCode >= 400 {
-		// Drain the error body via the same bridge so the message is complete.
-		errPayload, _ := io.ReadAll(newHostStreamReader(stream))
-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload))
-		if authUID != "" {
-			go reconcileByUID(authUID, statusCode, string(errPayload))
-		}
-		streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(errPayload), 200)))
-		return
-	}
-	collector := &sseUsageCollector{}
-	scanner := bufio.NewScanner(newHostStreamReader(stream))
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimPrefix(line, "data:")
-		var outer map[string]any
-		if json.Unmarshal([]byte(payload), &outer) != nil {
-			continue
-		}
-		bodyStr, ok := outer["body"].(string)
-		if !ok {
-			continue
-		}
-		if bodyStr == "[DONE]" {
-			break
-		}
-		collector.feed(bodyStr)
-		cleaned := cleanChunkJSON(bodyStr)
-		if cleaned == "" {
-			continue
-		}
-		if sseFramed {
-			cleaned = "data: " + cleaned
-		}
-		if err := streamEmit(streamID, []byte(cleaned)); err != nil {
-			// Client disconnected / host closed stream — abort; do not report success.
-			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error())
+
+	for attempt := 0; attempt <= budget; attempt++ {
+		stream, statusCode, _, err := hostHTTPDoStream(curReq)
+		if err != nil {
+			publishUsage(requestedModel, upstreamModel, curAuthUID, started, usage.Detail{}, true, 0, err.Error())
+			noteAccountFailure(curAuthID, 0, err.Error())
+			streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
 			return
 		}
-	}
-	// A mid-stream read failure means the client received a truncated stream:
-	// surface it as an error frame and record the attempt as failed.
-	if err := scanner.Err(); err != nil {
-		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error())
-		noteAccountFailure(authID, 0, err.Error())
-		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
+		if statusCode >= 400 {
+			// Drain the error body via the same bridge so the message is complete.
+			errPayload := readAllUpstreamErr(newHostStreamReader(stream))
+			stream.Close()
+			publishUsage(requestedModel, upstreamModel, curAuthUID, started, usage.Detail{}, true, statusCode, errPayload)
+			if curAuthUID != "" {
+				go reconcileByUID(curAuthUID, statusCode, errPayload)
+			}
+			noteAccountFailure(curAuthID, statusCode, errPayload)
+			// Retry policy: only account-level 4xx (401/403/404/405)
+			// benefit from switching accounts. 5xx/0/429/402 are already
+			// surfaced as failures and recorded; rotating the account on
+			// 5xx inside a single request gives no guarantee the next
+			// upstream isn't also 5xx, so we don't burn budget on it (the
+			// cooldown mechanism handles long-term 5xx). Business 400 is
+			// request-shaped and would fail identically on every account,
+			// so we propagate it immediately.
+			if !isAccountLevel4xx(statusCode) || attempt >= budget || encodedBody == "" {
+				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(errPayload, 200)))
+				return
+			}
+			// Pick the next account and rebuild the request against its
+			// COSY signature. If nothing else is usable, surface the
+			// original error.
+			nextID, nextSA, hasNext := pickNextAuth(curAuthID)
+			if !hasNext || nextSA == nil {
+				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(errPayload, 200)))
+				return
+			}
+			nextReq, rebErr := rebuildRequestWithQoderAuth(nextSA, encodedBody, upstreamModel)
+			if rebErr != nil {
+				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s (retry rebuild failed: %v)", statusCode, truncateRedacted(errPayload, 200), rebErr))
+				return
+			}
+			curReq = nextReq
+			curAuthID = nextID
+			curAuthUID = nextSA.Account.UID
+			continue
+		}
+		// Success — pump chunks to the host stream. From here on this
+		// attempt owns the response stream and must close it before
+		// returning.
+		collector := &sseUsageCollector{}
+		scanner := bufio.NewScanner(newHostStreamReader(stream))
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data:")
+			var outer map[string]any
+			if json.Unmarshal([]byte(payload), &outer) != nil {
+				continue
+			}
+			bodyStr, ok := outer["body"].(string)
+			if !ok {
+				continue
+			}
+			if bodyStr == "[DONE]" {
+				break
+			}
+			collector.feed(bodyStr)
+			cleaned := cleanChunkJSON(bodyStr)
+			if cleaned == "" {
+				continue
+			}
+			if sseFramed {
+				cleaned = "data: " + cleaned
+			}
+			if err := streamEmit(streamID, []byte(cleaned)); err != nil {
+				// Client disconnected / host closed stream — abort; do not report success.
+				stream.Close()
+				publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error())
+				return
+			}
+		}
+		// A mid-stream read failure means the client received a truncated stream:
+		// surface it as an error frame and record the attempt as failed.
+		stream.Close()
+		if err := scanner.Err(); err != nil {
+			publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), true, 0, err.Error())
+			noteAccountFailure(curAuthID, 0, err.Error())
+			streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
+			return
+		}
+		publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), false, 0, "")
+		invalidateAccountCredits(curAuthID, curAuthUID)
+		resetAccountFailover(curAuthID)
 		return
 	}
-	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
-	invalidateAccountCredits(authID, authUID)
-	resetAccountFailover(authID)
 }
 
 // collectUpstreamStreamQoder is the QoderWork-flavoured synchronous fallback
@@ -159,55 +218,86 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 // OpenAI chunks, return them as a slice. The collector, when non-nil,
 // observes the unwrapped inner chunks for usage extraction.
 func collectUpstreamStreamQoder(encodedBody string, sa *storedAuth, modelKey string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
-	httpReq, err := http.NewRequest(http.MethodPost, endpointChat, strings.NewReader(encodedBody))
-	if err != nil {
-		return nil, 0, err
-	}
-	if err := applyCosyHeaders(httpReq, sa, encodedBody, endpointChat, modelKey, true); err != nil {
-		return nil, 0, fmt.Errorf("cosy: %w", err)
-	}
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		return nil, 0, fmt.Errorf("http_error: %w", err)
-	}
-	defer stream.Close()
-	if statusCode >= 400 {
-		payload, _ := io.ReadAll(newHostStreamReader(stream))
-		return nil, statusCode, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
-	}
-	chunks := make([]pluginapi.ExecutorStreamChunk, 0, 64)
-	scanner := bufio.NewScanner(newHostStreamReader(stream))
-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.HasPrefix(line, "data:") {
+	// Per-request account-failover budget. 0 means no retry (kill switch
+	// via `retry_on_4xx: 0` in plugin.yaml). The encoded body is
+	// account-independent; each retry re-signs it with COSY for the next
+	// candidate account.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	lastStatus := 0
+	for attempt := 0; attempt <= budget; attempt++ {
+		httpReq, err := http.NewRequest(http.MethodPost, endpointChat, strings.NewReader(encodedBody))
+		if err != nil {
+			return nil, 0, err
+		}
+		if err := applyCosyHeaders(httpReq, curSA, encodedBody, endpointChat, modelKey, true); err != nil {
+			return nil, 0, fmt.Errorf("cosy: %w", err)
+		}
+		stream, statusCode, _, err := hostHTTPDoStream(httpReq)
+		if err != nil {
+			return nil, 0, fmt.Errorf("http_error: %w", err)
+		}
+		if statusCode >= 400 {
+			payload := readAllUpstreamErr(newHostStreamReader(stream))
+			stream.Close()
+			lastStatus = statusCode
+			errResp := fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(payload, 200))
+			// Retry policy: only account-level 4xx (401/403/404/405)
+			// benefit from switching accounts. 5xx/0/429/402 and business
+			// 400 are propagated immediately (the cooldown mechanism
+			// handles long-term failures).
+			if !isAccountLevel4xx(statusCode) || attempt >= budget || curSA == nil {
+				return nil, statusCode, errResp
+			}
+			// Failover bookkeeping keys on the same heuristic as the
+			// executor: access token first, UID fallback.
+			currentID := strings.TrimSpace(curSA.Auth.AccessToken)
+			if currentID == "" {
+				currentID = strings.TrimSpace(curSA.Account.UID)
+			}
+			_, nextSA, hasNext := pickNextAuth(currentID)
+			if !hasNext || nextSA == nil {
+				return nil, statusCode, errResp
+			}
+			curSA = nextSA
 			continue
 		}
-		payload := strings.TrimPrefix(line, "data:")
-		var outer map[string]any
-		if json.Unmarshal([]byte(payload), &outer) != nil {
-			continue
+		chunks := make([]pluginapi.ExecutorStreamChunk, 0, 64)
+		scanner := bufio.NewScanner(newHostStreamReader(stream))
+		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimPrefix(line, "data:")
+			var outer map[string]any
+			if json.Unmarshal([]byte(payload), &outer) != nil {
+				continue
+			}
+			bodyStr, ok := outer["body"].(string)
+			if !ok || bodyStr == "[DONE]" {
+				continue
+			}
+			if collector != nil {
+				collector.feed(bodyStr)
+			}
+			cleaned := cleanChunkJSON(bodyStr)
+			if cleaned == "" {
+				continue
+			}
+			if sseFramed {
+				cleaned = "data: " + cleaned
+			}
+			chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: json.RawMessage(cleaned)})
 		}
-		bodyStr, ok := outer["body"].(string)
-		if !ok || bodyStr == "[DONE]" {
-			continue
+		stream.Close()
+		if err := scanner.Err(); err != nil {
+			return chunks, 0, fmt.Errorf("upstream stream read error: %w", err)
 		}
-		if collector != nil {
-			collector.feed(bodyStr)
-		}
-		cleaned := cleanChunkJSON(bodyStr)
-		if cleaned == "" {
-			continue
-		}
-		if sseFramed {
-			cleaned = "data: " + cleaned
-		}
-		chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: json.RawMessage(cleaned)})
+		return chunks, 0, nil
 	}
-	if err := scanner.Err(); err != nil {
-		return chunks, 0, fmt.Errorf("upstream stream read error: %w", err)
-	}
-	return chunks, 0, nil
+	return nil, lastStatus, fmt.Errorf("upstream: retry budget exhausted")
 }
 
 // clientNeedsSSEFrame reports whether chunk payloads must carry their own

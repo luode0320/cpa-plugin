@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.13.0
+
+### Feature — 40x 同请求切号重试（retry_on_4xx 预算）
+
+账号级 40x（401/403/404/405）不再直接中断会话：同一请求在
+`retry_on_4xx` 预算内（默认 3，范围 0-5）自动切换到下一个可用账号重建
+请求重试，直到成功或预算耗尽。解决"坏号有积分但任何请求都 40x，会
+话被立刻打断"的场景——坏号被快速跳过，会话不中断。
+
+- 新建 `failover_retry.go`：同请求切号循环（`pickNextAuth` +
+  `rebuildRequestWithSA` 重建请求重试）。
+- 新建 `retry_config.go`：`retry_on_4xx` 配置加载与缓存（0 为 kill
+  switch，全局中断恢复期可一键关闭）。
+- `stream.go`：请求循环接入 40x 切号；预算耗尽或非账号级 4xx 才直返
+  `streamEmitError`。400 业务错误仍直通不重试。
+- `accountFailover.go`：40x 同时计入账号级故障，进入跨请求 cooldown
+  阶梯退避（1/3/10 分钟），后续请求跳过坏号。
+- `usage_config.go`：`retry_on_4xx` 配置项（缺省键保持当前值，kill
+  switch 安全）。
+- `accountFailover_test.go` / `failover_retry_test.go` /
+  `retry_config_test.go`：新增表格驱动测试覆盖白名单、预算边界、配置
+  缺省与 0 值开关。
+
+### 涉及文件
+
+- `workbuddy/failover_retry.go`（新增）
+- `workbuddy/retry_config.go`（新增）
+- `workbuddy/failover_retry_test.go`（新增）
+- `workbuddy/retry_config_test.go`（新增）
+- `workbuddy/stream.go` / `accountFailover.go` / `usage_config.go` /
+  `accountFailover_test.go`
+- `qoderwork/` 同构整批（逐函数适配，非整体覆盖）
+- `qoderwork-patches/` 补丁备份
+
 ## 0.12.1
 
 ### Fix — 保号 watchdog 首 tick 与宿主初始化竞态

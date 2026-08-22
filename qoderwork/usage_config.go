@@ -65,6 +65,13 @@ func configure(raw []byte) {
 	// failover default: enabled. Explicit account_failover: false disables the
 	// whole cooldown mechanism (pre-failover behavior).
 	nextFailoverEnabled := true
+	// retry_on_4xx: per-request account-failover budget. Applied ONLY when
+	// the key is present in config_yaml: a valid value is clamped to
+	// [0, 5] and applied; an unparseable value resets to the default 3.
+	// An absent key keeps the current budget so an unrelated reconfigure
+	// never silently lifts a `retry_on_4xx: 0` kill switch.
+	nextRetryOn4xx := retryOn4xxDefault
+	retryOn4xxSeen := false
 
 	cfgURL, cfgKey := "", ""
 	if len(raw) > 0 {
@@ -112,6 +119,12 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					nextKeepaliveAuto = v == "true" || v == "1" || v == "yes" || v == "on"
 				}
+				if strings.HasPrefix(line, "retry_on_4xx:") {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine(line); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					}
+				}
 			}
 		}
 	}
@@ -134,6 +147,14 @@ func configure(raw []byte) {
 	keepaliveAutoMu.Lock()
 	keepaliveAuto = nextKeepaliveAuto
 	keepaliveAutoMu.Unlock()
+
+	// retry_on_4xx: per-request account-failover budget, applied under its
+	// own lock so the executor loops reading it (loadedRetryOn4xx) stay
+	// atomic. Only when the key was present — absent keeps the current
+	// budget (kill-switch safety).
+	if retryOn4xxSeen {
+		setRetryOn4xx(nextRetryOn4xx)
+	}
 
 	// management key: config_yaml > env > keep existing. Empty stays empty
 	// (plugin-layer auth disabled, host middleware still guards).

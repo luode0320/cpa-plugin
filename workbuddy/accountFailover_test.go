@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -111,6 +112,50 @@ func TestRecordAccountFailure_Business4xxExcluded(t *testing.T) {
 	assertCooldownNear(t, "acc-1", 3*time.Minute)
 }
 
+// TestRecordAccountFailure_AccountLevel4xxCounted locks in the v0.12
+// behavior change: 401/403/404/405 now count as account-level failures
+// so the same-request failover loop in stream.go can switch accounts.
+// 400 is intentionally excluded (request-shaped error, not account-shaped).
+func TestRecordAccountFailure_AccountLevel4xxCounted(t *testing.T) {
+	resetFailover(t)
+	for _, status := range []int{401, 403, 404, 405} {
+		if !recordAccountFailure("acc-"+strconv.Itoa(status), status, "upstream rejected") {
+			t.Fatalf("account-level %d must count as account failure", status)
+		}
+	}
+	if recordAccountFailure("acc-400", 400, "bad request shape") {
+		t.Fatal("business 400 must still NOT count")
+	}
+}
+
+func TestIsAccountLevel4xx_Classification(t *testing.T) {
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{200, false},
+		{400, false}, // business — excluded by design
+		{401, true},
+		{403, true},
+		{404, true},
+		{405, true},
+		{406, false},
+		{409, false},
+		{410, false},
+		{418, false},
+		{422, false},
+		{429, false}, // covered by isSoftRateLimit, not isAccountLevel4xx
+		{500, false}, // covered by isAccountFailure's 5xx branch
+	}
+	for _, tc := range cases {
+		t.Run(strconv.Itoa(tc.status), func(t *testing.T) {
+			if got := isAccountLevel4xx(tc.status); got != tc.want {
+				t.Fatalf("isAccountLevel4xx(%d) = %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRecordAccountFailure_TransportAnd5xxCounted(t *testing.T) {
 	resetFailover(t)
 	if !recordAccountFailure("acc-1", 0, "connection refused") {
@@ -141,8 +186,12 @@ func TestIsAccountFailure_Classification(t *testing.T) {
 		{"402 credit marker in body", 200, `{"error":"insufficient credit"}`, true},
 		{"5xx", 503, "service unavailable", true},
 		{"5xx empty body", 500, "", true},
+		{"account-level 401", 401, "token expired", true},
+		{"account-level 403", 403, "no permission", true},
+		{"account-level 404", 404, "endpoint not found", true},
+		{"account-level 405", 405, "method not allowed", true},
 		{"business 400", 400, "bad request", false},
-		{"business 404", 404, "not found", false},
+		{"business 422", 422, "validation failed", false},
 		{"success", 200, "ok", false},
 	}
 	for _, tc := range cases {

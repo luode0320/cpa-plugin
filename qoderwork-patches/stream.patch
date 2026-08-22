@@ -1,0 +1,292 @@
+diff --git a/qoderwork/stream.go b/qoderwork/stream.go
+index 1e7cc76..2b50fc1 100644
+--- a/qoderwork/stream.go
++++ b/qoderwork/stream.go
+@@ -13,6 +13,7 @@ import (
+ 	"io"
+ 	"net/http"
+ 	"sort"
++	"strconv"
+ 	"strings"
+ 	"time"
+ 
+@@ -83,64 +84,171 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
+ 		defer cancel()
+ 	}
+ 
+-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
+-	if err != nil {
+-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
+-		noteAccountFailure(authID, 0, err.Error())
+-		streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
+-		return
+-	}
+-	defer stream.Close()
+-	if statusCode >= 400 {
+-		// Drain the error body via the same bridge so the message is complete.
+-		errPayload, _ := io.ReadAll(newHostStreamReader(stream))
+-		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(errPayload), reasoningEffort, 0, accountLabel)
+-		if authUID != "" {
+-			go reconcileByUID(authUID, statusCode, string(errPayload))
+-		}
+-		streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(string(errPayload), 200)))
+-		return
+-	}
+-	collector := &sseUsageCollector{}
+-	scanner := bufio.NewScanner(newHostStreamReader(stream))
+-	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+-	for scanner.Scan() {
+-		content := stripDataPrefix(scanner.Text())
+-		if content == "" || content == "[DONE]" {
+-			continue
++	// Per-request account-failover budget. 0 means no retry (kill switch
++	// via `retry_on_4xx: 0` in plugin.yaml). Hot path is unchanged when
++	// the budget is 0 — we still go through one attempt and propagate.
++	budget := loadedRetryOn4xx()
++	curReq := httpReq
++	curAuthID := authID
++	curAuthUID := authUID
++	curAccountLabel := accountLabel
++
++	for attempt := 0; attempt <= budget; attempt++ {
++		stream, statusCode, _, err := hostHTTPDoStream(curReq)
++		if err != nil {
++			publishUsage(requestedModel, upstreamModel, curAuthUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, curAccountLabel)
++			noteAccountFailure(curAuthID, 0, err.Error())
++			streamEmitError(streamID, fmt.Sprintf("http_error: %v", err))
++			return
+ 		}
+-		collector.feed(content)
+-		cleaned := cleanChunkJSON(content)
+-		if cleaned == "" {
++		if statusCode >= 400 {
++			// Drain the error body via the same bridge so the message is complete.
++			errPayload := readAllUpstreamErr(newHostStreamReader(stream))
++			stream.Close()
++			publishUsage(requestedModel, upstreamModel, curAuthUID, started, usage.Detail{}, true, statusCode, errPayload, reasoningEffort, 0, curAccountLabel)
++			if curAuthUID != "" {
++				go reconcileByUID(curAuthUID, statusCode, errPayload)
++			}
++			noteAccountFailure(curAuthID, statusCode, errPayload)
++
++			// Retry policy: only account-level 4xx (401/403/404/405)
++			// benefit from switching accounts. 5xx/0/429/402 are already
++			// surfaced as failures and recorded; rotating the account
++			// on 5xx inside a single request gives no guarantee the
++			// next upstream isn't also 5xx, so we don't burn budget
++			// on it (the cooldown mechanism handles long-term 5xx).
++			// Business 400 is request-shaped and would fail identically
++			// on every account, so we propagate it immediately.
++			if !isAccountLevel4xx(statusCode) {
++				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(errPayload, 200)))
++				return
++			}
++			if attempt >= budget {
++				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(errPayload, 200)))
++				return
++			}
++			// Pick the next account and rebuild the request against
++			// its endpoint + auth headers. If nothing else is
++			// usable, surface the original error.
++			nextID, nextSA, hasNext := pickNextAuth(curAuthID)
++			if !hasNext || nextSA == nil {
++				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s", statusCode, truncateRedacted(errPayload, 200)))
++				return
++			}
++			curReq, rebErr := rebuildRequestWithSA(curReq, nextSA)
++			if rebErr != nil {
++				streamEmitError(streamID, fmt.Sprintf("upstream %d: %s (retry rebuild failed: %v)", statusCode, truncateRedacted(errPayload, 200), rebErr))
++				return
++			}
++			curAuthID = nextID
++			curAuthUID = nextSA.Account.UID
++			curAccountLabel = strings.TrimSpace(nextSA.Account.Nickname)
++			if curAccountLabel == "" {
++				curAccountLabel = curAuthUID
++			}
+ 			continue
+ 		}
+-		if sseFramed {
+-			cleaned = "data: " + cleaned
++		// Success — pump chunks to the host stream. From here on this
++		// attempt owns the response stream and must close it before
++		// returning.
++		collector := &sseUsageCollector{}
++		scanner := bufio.NewScanner(newHostStreamReader(stream))
++		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
++		for scanner.Scan() {
++			content := stripDataPrefix(scanner.Text())
++			if content == "" || content == "[DONE]" {
++				continue
++			}
++			collector.feed(content)
++			cleaned := cleanChunkJSON(content)
++			if cleaned == "" {
++				continue
++			}
++			if sseFramed {
++				cleaned = "data: " + cleaned
++			}
++			if err := streamEmit(streamID, []byte(cleaned)); err != nil {
++				// Client disconnected / host closed stream — abort; do not report success.
++				stream.Close()
++				publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error(), reasoningEffort, collector.ttftNS(started), curAccountLabel)
++				return
++			}
+ 		}
+-		if err := streamEmit(streamID, []byte(cleaned)); err != nil {
+-			// Client disconnected / host closed stream — abort; do not report success.
+-			publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, "stream_emit: "+err.Error(), reasoningEffort, collector.ttftNS(started), accountLabel)
++		// A mid-stream read failure means the client received a truncated stream:
++		// surface it as an error frame and record the attempt as failed.
++		stream.Close()
++		if err := scanner.Err(); err != nil {
++			publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), true, 0, err.Error(), reasoningEffort, collector.ttftNS(started), curAccountLabel)
++			noteAccountFailure(curAuthID, 0, err.Error())
++			streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
+ 			return
+ 		}
+-	}
+-	// A mid-stream read failure means the client received a truncated stream:
+-	// surface it as an error frame and record the attempt as failed.
+-	if err := scanner.Err(); err != nil {
+-		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, err.Error(), reasoningEffort, collector.ttftNS(started), accountLabel)
+-		noteAccountFailure(authID, 0, err.Error())
+-		streamEmitError(streamID, fmt.Sprintf("upstream stream read error: %v", err))
++		publishUsage(requestedModel, upstreamModel, curAuthUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), curAccountLabel)
++		invalidateAccountCredits(curAuthID, curAuthUID)
++		resetAccountFailover(curAuthID)
+ 		return
+ 	}
+-	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), accountLabel)
+-	invalidateAccountCredits(authID, authUID)
+-	resetAccountFailover(authID)
+ }
+ 
+ // collectUpstreamStream is the synchronous fallback (no async stream id): drain
+ // the upstream, clean each chunk, return them as a slice. The collector, when
+ // non-nil, observes raw upstream chunks for usage extraction. statusCode is the
+ // upstream HTTP status (0 for transport-level failures).
++//
++// On an account-level 4xx (401/403/404/405) the request body is fine — only
++// the chosen credential is broken for this endpoint. We try a
++// configured-budget number of alternate accounts before giving up. Failures
++// found by isAccountFailure (5xx, 0, 429, 402) are still surfaced as
++// errors but do NOT trigger a same-request account rotation; the
++// failover-cooldown layer handles those across requests.
+ func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
++	budget := loadedRetryOn4xx()
++	curSA := sa
++	var lastStatus int
++	var lastErr error
++
++	for attempt := 0; attempt <= budget; attempt++ {
++		chunks, statusCode, errOnce := collectUpstreamStreamOnce(body, curSA, sseFramed, collector)
++		if errOnce == nil {
++			return chunks, statusCode, nil
++		}
++		lastStatus = statusCode
++		lastErr = errOnce
++
++		// Same retry policy as pumpUpstreamStream: only account-level
++		// 4xx warrant a same-request account rotation.
++		if !isAccountLevel4xx(statusCode) {
++			return chunks, statusCode, errOnce
++		}
++		if attempt >= budget {
++			return chunks, statusCode, errOnce
++		}
++		// curSA.Account.UID is the host auth id; for pickNextAuth we
++		// key on the same scheduler-level ID that noteAccountFailure
++		// uses, which is sa.Auth.AccessToken-derived. If we don't
++		// have an auth-id-shaped handle, skip the swap (the original
++		// error propagates).
++		currentID := strings.TrimSpace(curSA.Auth.AccessToken)
++		if currentID == "" {
++			currentID = strings.TrimSpace(curSA.Account.UID)
++		}
++		if currentID == "" {
++			return chunks, statusCode, errOnce
++		}
++		_, nextSA, hasNext := pickNextAuth(currentID)
++		if !hasNext || nextSA == nil {
++			return chunks, statusCode, errOnce
++		}
++		curSA = nextSA
++	}
++	return nil, lastStatus, lastErr
++}
++
++// collectUpstreamStreamOnce performs exactly one synchronous upstream call
++// against sa: build the request, route via host.http.do_stream, decide
++// success vs 4xx/5xx. Pulled out of collectUpstreamStream so the retry
++// loop can rebuild the request against a different account on failure.
++func collectUpstreamStreamOnce(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+ 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
+ 	if err != nil {
+ 		return nil, 0, err
+@@ -167,6 +275,64 @@ func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collecto
+ 	return chunks, statusCode, nil
+ }
+ 
++// doExecuteOnce performs exactly one synchronous execute against sa: build
++// the request, route via host.http.do_stream, fold SSE into a chat.completion
++// payload. Pulled out of handleExecExecute so the retry loop can rebuild the
++// request against a different account on failure. Returns a non-nil error
++// in the canonical "upstream N: ..." or "http_error: ..." shape that
++// parseUpstreamStatusFromErr understands.
++func doExecuteOnce(body []byte, sa *storedAuth, requestedModel string) ([]byte, error) {
++	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
++	if err != nil {
++		return nil, err
++	}
++	backendHeaders(httpReq, sa)
++	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
++	if err != nil {
++		return nil, fmt.Errorf("http_error: %w", err)
++	}
++	defer stream.Close()
++	reader := newHostStreamReader(stream)
++	if statusCode >= 400 {
++		payload, _ := io.ReadAll(reader)
++		if sa != nil && sa.Account.UID != "" {
++			go reconcileByUID(sa.Account.UID, statusCode, string(payload))
++		}
++		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
++	}
++	var firstByteAt time.Time
++	completion, err := aggregateCompletion(reader, requestedModel, &firstByteAt)
++	if err != nil {
++		return nil, err
++	}
++	return completion, nil
++}
++
++// parseUpstreamStatusFromErr recovers the upstream HTTP status code from a
++// "upstream N: ..." sentinel error (or returns 0 for any other shape /
++// transport-level errors like http_error / http_error: ...). Used by the
++// execute-retry loop in handleExecExecute to decide whether to switch
++// accounts.
++func parseUpstreamStatusFromErr(err error) int {
++	if err == nil {
++		return 0
++	}
++	msg := err.Error()
++	if !strings.HasPrefix(msg, "upstream ") {
++		return 0
++	}
++	rest := strings.TrimPrefix(msg, "upstream ")
++	idx := strings.Index(rest, ":")
++	if idx <= 0 {
++		return 0
++	}
++	n, perr := strconv.Atoi(strings.TrimSpace(rest[:idx]))
++	if perr != nil {
++		return 0
++	}
++	return n
++}
++
+ // clientNeedsSSEFrame reports whether chunk payloads must carry their own
+ // "data: " SSE framing. CPA's chat-completions passthrough adds the prefix
+ // itself, but every cross-format response translator (claude/gemini/codex/...)
