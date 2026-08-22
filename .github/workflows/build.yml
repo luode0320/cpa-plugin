@@ -211,7 +211,7 @@ jobs:
             go build -trimpath -buildmode=c-shared \
               -ldflags "-s -w -X main.version=${VERSION}" \
               -o "dist/${LIB_NAME}" .
-          rm -f "dist/${PLUGIN}.h" dist/*.h || true
+          rm -f "dist/${{ matrix.id }}.h" dist/*.h || true
           file "dist/${LIB_NAME}" || true
 
       - name: Package plugin (CPA ArchiveName)
@@ -321,7 +321,7 @@ jobs:
       - name: Package plugin
         run: |
           set -euo pipefail
-          rm -f go-cross-bin.h "${{ matrix.src }}/dist/${{ matrix.target }}/${PLUGIN}.h" || true
+          rm -f go-cross-bin.h "${{ matrix.src }}/dist/${{ matrix.target }}/${{ matrix.id }}.h" || true
           LIB=""
           for p in \
             "${{ matrix.src }}/dist/${{ matrix.target }}/${LIB_NAME}" \
