@@ -131,6 +131,18 @@ plugins:
       #   off     → defer to CPA's built-in scheduler entirely
       scheduler_mode: "session"
 
+      # Routing pools — per-account three-state panel button (default →
+      # priority → fallback → default), or
+      # POST /plugins/workbuddy/pool {auth_index, pool}. Every account is
+      # "default" unless marked. Routing cascades strictly:
+      #   priority bucket (≥1 usable account) → default bucket → fallback
+      #   bucket. While a higher bucket has a usable account (not
+      #   disabled/exhausted/cooling-down), ALL routed traffic stays inside
+      #   it; lower buckets only see traffic when every higher account is
+      #   unusable. Live toggle, persisted on the auth file (top-level
+      #   `pool` field; legacy `priority: true` auto-migrates), no restart
+      #   needed.
+
       # CPAMP usage forwarding. Both must be set for any record to be sent.
       # Falls back to USAGE_REPORT_URL / USAGE_REPORT_KEY /
       # CPAMP_ADMIN_KEY env vars or docker secret files when unset here.
@@ -159,6 +171,35 @@ plugins:
 Model aliases and exclusions are handled natively by CPA's
 `oauth-model-alias` and `oauth-excluded-models` config — no plugin-side
 duplication needed.
+
+## Routing pools (priority / default / fallback)
+
+The panel's three-state pool button (default → priority → fallback → default)
+splits routing candidates into three buckets on top of the existing
+session/credits pickers. Every account is **default** unless marked:
+
+- **Priority bucket** — accounts marked `pool: "priority"` (persisted on the
+  physical auth file, top-level field). While at least one priority account
+  is usable, `scheduler.pick` only ever returns priority accounts, even if
+  the panel-selected "active" account is a default one.
+- **Default bucket** — every unmarked account. Used when the priority bucket
+  is empty or every priority account is disabled / exhausted / cooling-down.
+- **Fallback bucket** — accounts marked `pool: "fallback"`. Last resort:
+  used only when BOTH the priority and the default bucket have no usable
+  account, so pool-level exhaustion never causes 4xx/5xx cascades.
+
+Rules:
+
+1. Usable = not disabled, not credit-exhausted, not in failover cooldown.
+2. The cascade is strict: priority → default → fallback. Inside the winning
+   bucket the existing rules still apply (skip exhausted members, session
+   stickiness within the bucket). If NO bucket has a usable account, routing
+   defers to the built-in scheduler.
+3. Session bindings migrate to the priority bucket automatically when a
+   priority account appears, and back down the cascade when it empties.
+4. Toggle is live: no restart, no config change. Deleting an account also
+   removes it from the pool. Legacy `priority: true` marks (v0.9.x) are
+   auto-migrated to the priority pool on read.
 
 ## Lifecycle
 

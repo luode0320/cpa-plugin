@@ -24,7 +24,8 @@ type wbAccount struct {
 	Status       string          `json:"status"`
 	Disabled     bool            `json:"disabled"`
 	Exhausted    bool            `json:"exhausted"`
-	Selected     bool            `json:"selected"` // panel active routing card
+	Selected     bool            `json:"selected"`  // panel active routing card
+	Pool         string          `json:"pool"`      // routing pool: default|priority|fallback
 	Credits      *creditsSummary `json:"credits,omitempty"`
 	Checkin      *checkinSummary `json:"checkin,omitempty"`
 	TrialClaimed bool            `json:"trial_claimed,omitempty"` // Global: expert trial already claimed
@@ -174,21 +175,27 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 	checkinAutoMu.RUnlock()
 	// Ensure default selection for panel + scheduler (first usable card).
 	activeID := ensureDefaultActiveAuth(out)
+	// Sync pool markers from the disk-backed map — single source of truth.
+	// refreshAuthPoolFromDisk also prunes entries for accounts that no
+	// longer exist so the scheduler can't pin a session to a deleted auth.
+	poolSizes := refreshAuthPoolFromDisk()
 	// Aggregate credits for panel/API consumers (all accounts currently in out).
 	sum := summarizeCredits(out)
-	// Mark selected account in list for UI.
+	// Mark selected account in list for UI; pool comes from the disk mirror.
 	for i := range out {
 		out[i].Selected = out[i].AuthID == activeID
+		out[i].Pool = poolFor(out[i].AuthID)
 	}
 	resp := map[string]any{
-		"accounts":       out,
-		"active_auth":    activeID,
-		"scheduler_mode": loadedSchedulerMode(),
-		"checkin_auto":   auto,
-		"lifecycle_auto": lifecycleEnabled(),
-		"schedule":       []string{"09:00", "21:00"},
-		"server_time":    time.Now().Format("2006-01-02 15:04:05"),
-		"summary":        sum,
+		"accounts":           out,
+		"active_auth":        activeID,
+		"scheduler_mode":     loadedSchedulerMode(),
+		"checkin_auto":       auto,
+		"lifecycle_auto":     lifecycleEnabled(),
+		"schedule":           []string{"09:00", "21:00"},
+		"server_time":        time.Now().Format("2006-01-02 15:04:05"),
+		"summary":            sum,
+		"pool_sizes":         poolSizes, // {priority: N, fallback: N}; default implicit
 	}
 	if len(life) > 0 {
 		resp["lifecycle"] = life

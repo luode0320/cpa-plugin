@@ -151,6 +151,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/import", Description: "Import WorkBuddy credential JSON (nested or flat) into host auth store."},
 			{Method: http.MethodPost, Path: base + "/trial", Description: "Claim expert trial pack for one Global account (auth_index). One-time 250 credits / 14 days."},
 			{Method: http.MethodPost, Path: base + "/select", Description: "Select the active account card used for chat routing (body: {auth_index})."},
+			{Method: http.MethodPost, Path: base + "/pool", Description: "Assign an account to a routing pool (body: {auth_index, pool: default|priority|fallback}). scheduler.pick cascades priority → default → fallback: while a higher pool has a usable account, lower pools get no traffic."},
 			{Method: http.MethodPost, Path: base + "/toggle", Description: "Enable or disable one account (body: {auth_index, disabled}). Disable works on the active account; enable is refused when credits are unknown or exhausted."},
 			{Method: http.MethodPost, Path: base + "/keepalive", Description: "Manually refresh access tokens for all accounts (or one with auth_index)."},
 			{Method: http.MethodGet, Path: base + "/keepalive/status", Description: "Last keepalive run summary + config."},
@@ -209,6 +210,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleClaimTrial(req)))
 	case req.Method == http.MethodPost && path == base+"/select":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleSelectAuth(req)))
+	case req.Method == http.MethodPost && path == base+"/pool":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, handlePoolToggle(req)))
 	case req.Method == http.MethodPost && path == base+"/toggle":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleToggleAuth(req)))
 	case req.Method == http.MethodPost && path == base+"/keepalive":
@@ -336,6 +339,7 @@ func mutatingManagementPath(path string) bool {
 		base + "/import",
 		base + "/trial",
 		base + "/select",
+		base + "/pool",
 		base + "/toggle",
 		base + "/keepalive":
 		return true

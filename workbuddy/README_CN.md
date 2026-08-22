@@ -112,6 +112,14 @@ plugins:
       #   off     → 完全交给 CPA 内置调度
       scheduler_mode: "session"
 
+      # 三池路由 — 面板按钮三态循环（默认 → 优先 → 兜底 → 默认），或
+      # POST /plugins/workbuddy/pool {auth_index, pool} 逐账号设置。未标记
+      # 账号一律属于"默认"池。路由严格级联：优先池（有可用账号）→ 默认池
+      # → 兜底池。高一级池子只要还有可用账号（未禁用/未耗尽/未冷却），
+      # 所有路由流量只在池内选择；低一级池子只有等上级全部不可用才承接。
+      # 即点即生效，持久化在 auth 文件顶级 pool 字段（旧 priority: true
+      # 自动迁移），无需重启。
+
       # CPAMP usage 上报。URL+key 都设置才会上报。
       # 未配置时 fallback 到 USAGE_REPORT_URL / USAGE_REPORT_KEY /
       # CPAMP_ADMIN_KEY 环境变量或 docker secret 文件。
@@ -137,6 +145,29 @@ plugins:
 
 模型 alias 和排除走 CPA 原生 `oauth-model-alias` 和 `oauth-excluded-models`
 配置，无需插件侧重复。
+
+## 路由三池（优先 / 默认 / 兜底）
+
+面板的三态池按钮（默认 → 优先 → 兜底 → 默认）在现有 session / credits
+选择逻辑之上，把路由候选分成三个桶。未标记账号一律属于**默认池**：
+
+- **优先桶** — 标记 `pool: "priority"` 的账号（持久化在 auth 文件顶级字段）。
+  只要至少一个优先账号可用，`scheduler.pick` 只会返回优先账号，即使面板
+  "选用"的是默认账号。
+- **默认桶** — 所有未标记账号。当优先桶为空、或全部优先账号
+  disabled / exhausted / cooling-down 时使用。
+- **兜底桶** — 标记 `pool: "fallback"` 的账号。最后防线：仅当优先桶和
+  默认桶都没有可用账号时才使用，池级耗尽不会引发 4xx/5xx 级联。
+
+规则：
+
+1. 可用 = 未禁用、未积分耗尽、未进入 failover cooldown。
+2. 级联严格：优先 → 默认 → 兜底。命中桶内部仍沿用原有规则（跳过耗尽
+   成员、桶内 session 粘性）。三个桶都没有可用账号时 defer 内置调度。
+3. 优先账号出现时，已 pin 到默认账号的会话 binding 自动迁移到优先桶；
+   优先桶耗尽后再逐级迁回。
+4. 切换即点即生效：无需重启、无需改配置。删除账号时自动移出池。
+   v0.9.x 旧 `priority: true` 标记读取时自动迁移为优先池。
 
 ## 生命周期
 

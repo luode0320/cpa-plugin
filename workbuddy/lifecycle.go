@@ -208,6 +208,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 		rememberLifecycleState(authID, true, note)
 		accountCache.Delete(authID)
 		clearActiveAuthIfMatch(authID)
+		clearPoolFor(authID)
 		return nil
 	}
 	if err := deleteAuthFileInDir(path, filepath.Dir(path)); err != nil {
@@ -226,6 +227,7 @@ func deleteAuth(authIndex, authID string, sa *storedAuth) error {
 	lifecycleState.Delete(authID)
 	accountCache.Delete(authID)
 	clearActiveAuthIfMatch(authID)
+	clearPoolFor(authID)
 	return nil
 }
 

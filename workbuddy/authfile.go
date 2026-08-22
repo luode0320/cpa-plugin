@@ -307,7 +307,7 @@ func parseDisabledFromAuthJSON(raw []byte) bool {
 
 // manualDisableFromAuthJSON reads the top-level manual_disable flag. It is set
 // when the panel toggle disables an account and cleared on manual re-enable.
-// The host surfaces it in coreauth.Auth.Metadata (like note/priority/websockets);
+// The host surfaces it in coreauth.Auth.Metadata (like note/pool/websockets);
 // lifecycle reconcile honors it by never auto-re-enabling a manually disabled
 // account, even when credits recover.
 
@@ -317,6 +317,36 @@ func manualDisableFromAuthJSON(raw []byte) bool {
 	}
 	_ = json.Unmarshal(raw, &m)
 	return m.ManualDisable
+}
+
+// parsePoolFromAuthJSON reads the top-level pool marker. Valid values are
+// "default", "priority" and "fallback"; the legacy boolean `priority: true`
+// (v0.9.x two-pool era) is still honored and maps to the priority pool. Any
+// missing or unknown value falls back to "default" so every account belongs
+// to exactly one pool.
+//
+// The marker is the single source of truth — it lives on the physical auth
+// JSON, never on the host's auth record, because host.auth.save rebuilds the
+// record and drops top-level fields the host doesn't recognize (same root
+// cause as manual_disable). The plugin's authPool mirrors this in-memory map
+// after each physical write so scheduler.pick reads without a disk hit per
+// request.
+func parsePoolFromAuthJSON(raw []byte) string {
+	var m struct {
+		Pool     string `json:"pool"`
+		Priority bool   `json:"priority"` // legacy v0.9.x marker
+	}
+	_ = json.Unmarshal(raw, &m)
+	switch strings.TrimSpace(m.Pool) {
+	case poolPriority, poolFallback:
+		return strings.TrimSpace(m.Pool)
+	case poolDefault:
+		return poolDefault
+	}
+	if m.Priority {
+		return poolPriority
+	}
+	return poolDefault
 }
 
 // isSafeWorkbuddyAuthPath rejects non-workbuddy filenames, empty paths, and

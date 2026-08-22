@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.0
+
+### Feature — 三池路由（priority / default / fallback 级联）
+
+会话路由（scheduler_mode=session / credits）此前只有"选用"（单选 sticky
+active）一种偏好：面板选中哪个账号，路由就粘在哪个账号上。本次新增
+**三池划分**（写 auth 文件顶级 `pool` 字段，宿主 watcher 自动接管，重启
+不丢），按钮三态循环切换：
+
+- **优先池（priority）**：路由第一优先级。**只要优先池里还存在可用账号
+  （未禁用、未耗尽、未冷却），路由就只在优先池内选择**——默认/兜底池
+  账号不会随机漏入，即使面板"选用"的是默认账号。
+- **默认池（default）**：所有未标记账号的默认归属。优先池为空、或全部
+  优先账号 disabled / exhausted / cooling-down 时，路由级联到默认池。
+- **兜底池（fallback）**：最后防线。仅当优先池与默认池都没有可用账号
+  时，路由才使用兜底池，保证不因池级耗尽而 4xx/5xx 级联。
+- **三级回落**：优先池内仍按原有规则跳过 exhausted / cooling-down 成员；
+  逐级回落（优先 → 默认 → 兜底），全部不可用才 defer 内置调度。
+- **live 切换**：面板按钮三态循环（默认 → 优先 → 兜底 → 默认），即点即
+  生效（`POST /plugins/workbuddy/pool` body `{auth_index, pool}`），无需
+  重启；每次 /accounts 刷新从磁盘重建 pool，手工改 auth 文件同样生效。
+- **兼容迁移**：v0.9.x 的旧 `priority: true` 布尔标记自动映射为优先池，
+  写入时统一收敛为 `pool` 字段。
+- **session 粘性联动**：会话已 pin 到默认账号时，一旦优先账号出现，下次
+  pick 自动把 binding 迁移到优先池；优先池耗尽后再迁回默认池。
+- **删除清理**：删除账号时自动从 pool 移除，不会残留幽灵路由。
+
+### API
+
+- 新增管理端点 `POST /plugins/workbuddy/pool`（幂等，body
+  `{auth_index, pool: default|priority|fallback}`，返回 `pool` 与
+  `pool_sizes`）。
+- `/accounts` 响应每账号新增 `pool`（default|priority|fallback）与
+  `pool_sizes`（{priority: N, fallback: N}）；单卡 `/credits` 响应新增
+  `pool`。
+
 ## 0.9.9
 
 ### Feature — 账户级 Failover：429/耗尽自动切换（阶梯指数退避）
