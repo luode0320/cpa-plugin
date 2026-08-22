@@ -32,6 +32,13 @@ func Open(config Config) (*Store, error) {
 // shape is pluginapi.UsageRecord JSON; the decode reuses the same canonical
 // normalization as the original cap-token-usage-tracker plugin so api-provider
 // requests show up in the dashboard alongside workbuddy feed records.
+//
+// When the host-delivered SessionKey is empty and DerivedSessionEnabled is
+// true, the store falls back to a derived pseudo session_key of the form
+// auth:<id>:<provider>:<alias>:<bucket> so the dashboard's 会话 column does
+// not render "—" for api-provider records. A real SessionKey from the host
+// always wins — the derived key only fills the gap until the host gains
+// session awareness.
 func (s *Store) RecordUsageRecord(raw []byte) error {
 	if s == nil {
 		return fmt.Errorf("store is not initialized")
@@ -52,6 +59,11 @@ func (s *Store) RecordUsageRecord(raw []byte) error {
 	usage.Dimensions.APIKeyHash = ""
 	usage.Dimensions.APIKeyGeneration = 0
 	usage.Dimensions.APIKeyStatus = apiKeyStatusSourceMissing
+	if s.derivedSessionEnabled && strings.TrimSpace(usage.Dimensions.SessionKey) == "" {
+		if derived := DeriveAuthSessionKey(usage.Dimensions.Provider, usage.Dimensions.Alias, usage.authIndex, usage.RequestedAt, s.derivedSessionWindow); derived != "" {
+			usage.Dimensions.SessionKey = derived
+		}
+	}
 	return s.Record(usage)
 }
 

@@ -171,7 +171,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.1.9"
+var version = "0.2.0"
 
 func trackerRegistration() registration {
 	return registration{
@@ -191,6 +191,8 @@ func trackerRegistration() registration {
 				{Name: "usage_flush_interval", Type: pluginapi.ConfigFieldTypeString, Description: "Database flush interval, Go duration (1s-1h, default 5s)."},
 				{Name: "usage_flush_max_records", Type: pluginapi.ConfigFieldTypeInteger, Description: "Max records buffered before forcing a flush (1-1000000, default 100)."},
 				{Name: "usage_poll_interval", Type: pluginapi.ConfigFieldTypeString, Description: "Feed poll interval, Go duration (1s-1h, default 5s)."},
+				{Name: "usage_derived_session_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "When true, derive a pseudo session_key (auth:<id>:<provider>:<alias>:<bucket>) for host UsagePlugin broadcasts that carry no real session. The real SessionKey always wins. Default true."},
+				{Name: "usage_derived_session_window", Type: pluginapi.ConfigFieldTypeString, Description: "Time bucket used by the derived pseudo session_key, Go duration (1m-24h, default 30m). Smaller windows separate more conversations but match fewer records together."},
 			},
 		},
 		Capabilities: registrationCapability{

@@ -203,47 +203,51 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 type Store struct {
-	db               *bolt.DB
-	lease            *storeLease
-	commands         chan any
-	done             chan struct{}
-	closeOnce        sync.Once
-	stateMu          sync.RWMutex
-	costMu           sync.Mutex
-	costCache        map[costCacheKey]CostResponse
-	costOrder        []costCacheKey
-	costFlights      map[costCacheKey]*costFlight
-	costScanHook     func()
-	closed           bool
-	closeErr         error
-	cryptoMu         sync.RWMutex
-	activeGeneration uint64
-	generations      map[uint64]APIKeyCryptoGeneration
+	db                       *bolt.DB
+	lease                    *storeLease
+	commands                 chan any
+	done                     chan struct{}
+	closeOnce                sync.Once
+	stateMu                  sync.RWMutex
+	costMu                   sync.Mutex
+	costCache                map[costCacheKey]CostResponse
+	costOrder                []costCacheKey
+	costFlights              map[costCacheKey]*costFlight
+	costScanHook             func()
+	closed                   bool
+	closeErr                 error
+	cryptoMu                 sync.RWMutex
+	activeGeneration         uint64
+	generations              map[uint64]APIKeyCryptoGeneration
+	derivedSessionEnabled    bool
+	derivedSessionWindow     time.Duration
 }
 
 type storeActor struct {
-	db                   *bolt.DB
-	config               Config
-	crypto               cryptoContext
-	data                 map[aggregateKey]Counters
-	dirty                map[aggregateKey]struct{}
-	since                time.Time
-	lastUsed             time.Time
-	pending              int
-	lastPruneAt          time.Time
-	lastFlushErr         error
-	pendingRequests      []RequestDetail
-	nextRequestSeq       uint64
-	modelPrices          map[string]ModelPrice
-	priceRevision        uint64
-	priceSyncSettings    PriceSyncSettings
-	lastPriceSync        *PriceSyncMetadata
-	costGeneration       uint64
-	dashboardPreferences DashboardPreferences
-	apiKeyCiphertexts    map[string]string
-	apiKeyLabels         map[string]string
-	activeGeneration     uint64
-	generations          map[uint64]APIKeyCryptoGeneration
+	db                       *bolt.DB
+	config                   Config
+	crypto                   cryptoContext
+	data                     map[aggregateKey]Counters
+	dirty                    map[aggregateKey]struct{}
+	since                    time.Time
+	lastUsed                 time.Time
+	pending                  int
+	lastPruneAt              time.Time
+	lastFlushErr             error
+	pendingRequests          []RequestDetail
+	nextRequestSeq           uint64
+	modelPrices              map[string]ModelPrice
+	priceRevision            uint64
+	priceSyncSettings        PriceSyncSettings
+	lastPriceSync            *PriceSyncMetadata
+	costGeneration           uint64
+	dashboardPreferences     DashboardPreferences
+	apiKeyCiphertexts        map[string]string
+	apiKeyLabels             map[string]string
+	activeGeneration         uint64
+	generations              map[uint64]APIKeyCryptoGeneration
+	derivedSessionEnabled    bool
+	derivedSessionWindow     time.Duration
 }
 
 func openStore(config Config) (*Store, error) {
@@ -267,14 +271,16 @@ func openStoreWithCrypto(config Config, crypto cryptoContext) (*Store, error) {
 	}
 
 	actor := &storeActor{
-		db:                   db,
-		config:               config,
-		crypto:               crypto,
-		data:                 make(map[aggregateKey]Counters),
-		dirty:                make(map[aggregateKey]struct{}),
-		dashboardPreferences: defaultDashboardPreferences(),
-		apiKeyCiphertexts:    make(map[string]string),
-		apiKeyLabels:         make(map[string]string),
+		db:                    db,
+		config:                config,
+		crypto:                crypto,
+		data:                  make(map[aggregateKey]Counters),
+		dirty:                 make(map[aggregateKey]struct{}),
+		dashboardPreferences:  defaultDashboardPreferences(),
+		apiKeyCiphertexts:     make(map[string]string),
+		apiKeyLabels:          make(map[string]string),
+		derivedSessionEnabled: config.DerivedSessionEnabled,
+		derivedSessionWindow:  NormalizeDerivedSessionWindow(config.DerivedSessionWindow),
 	}
 	if err := actor.initialize(); err != nil {
 		_ = db.Close()
@@ -283,14 +289,16 @@ func openStoreWithCrypto(config Config, crypto cryptoContext) (*Store, error) {
 	}
 
 	store := &Store{
-		db:               db,
-		lease:            lease,
-		commands:         make(chan any, 256),
-		done:             make(chan struct{}),
-		costCache:        make(map[costCacheKey]CostResponse),
-		costFlights:      make(map[costCacheKey]*costFlight),
-		activeGeneration: actor.activeGeneration,
-		generations:      cloneAPIKeyGenerations(actor.generations),
+		db:                    db,
+		lease:                 lease,
+		commands:              make(chan any, 256),
+		done:                  make(chan struct{}),
+		costCache:             make(map[costCacheKey]CostResponse),
+		costFlights:           make(map[costCacheKey]*costFlight),
+		activeGeneration:      actor.activeGeneration,
+		generations:           cloneAPIKeyGenerations(actor.generations),
+		derivedSessionEnabled: actor.derivedSessionEnabled,
+		derivedSessionWindow:  actor.derivedSessionWindow,
 	}
 	go store.run(actor)
 	go lease.monitor(store)

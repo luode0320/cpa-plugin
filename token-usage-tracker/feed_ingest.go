@@ -49,24 +49,28 @@ const (
 
 // trackerConfig is the lock-protected plugin configuration snapshot.
 type trackerConfig struct {
-	ManagementKey   string
-	FeedEnabled     bool
-	FeedPath        string
-	DBPath          string
-	RetentionDays   int
-	FlushInterval   time.Duration
-	FlushMaxRecords int
-	PollInterval    time.Duration
+	ManagementKey            string
+	FeedEnabled              bool
+	FeedPath                 string
+	DBPath                   string
+	RetentionDays            int
+	FlushInterval            time.Duration
+	FlushMaxRecords          int
+	PollInterval             time.Duration
+	DerivedSessionEnabled    bool
+	DerivedSessionWindow     time.Duration
 }
 
 var (
 	trackerCfgMu  sync.RWMutex
 	trackerCfg = trackerConfig{
-		FeedEnabled:     true,
-		RetentionDays:   defaultUsageRetentionDays,
-		FlushInterval:   defaultUsageFlushInterval,
-		FlushMaxRecords: defaultUsageFlushMaxRecords,
-		PollInterval:    defaultUsagePollInterval,
+		FeedEnabled:           true,
+		RetentionDays:         defaultUsageRetentionDays,
+		FlushInterval:         defaultUsageFlushInterval,
+		FlushMaxRecords:       defaultUsageFlushMaxRecords,
+		PollInterval:          defaultUsagePollInterval,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  usagestats.DefaultDerivedSessionWindow,
 	}
 )
 
@@ -85,11 +89,13 @@ var (
 // dashboard and only disables statistics ingestion.
 func configure(raw []byte) {
 	next := trackerConfig{
-		FeedEnabled:     true,
-		RetentionDays:   defaultUsageRetentionDays,
-		FlushInterval:   defaultUsageFlushInterval,
-		FlushMaxRecords: defaultUsageFlushMaxRecords,
-		PollInterval:    defaultUsagePollInterval,
+		FeedEnabled:           true,
+		RetentionDays:         defaultUsageRetentionDays,
+		FlushInterval:         defaultUsageFlushInterval,
+		FlushMaxRecords:       defaultUsageFlushMaxRecords,
+		PollInterval:          defaultUsagePollInterval,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  usagestats.DefaultDerivedSessionWindow,
 	}
 	next.ManagementKey = strings.TrimSpace(os.Getenv("TOKEN_USAGE_TRACKER_MANAGEMENT_KEY"))
 
@@ -135,6 +141,13 @@ func configure(raw []byte) {
 				case strings.HasPrefix(line, "usage_poll_interval:"):
 					if d, err := time.ParseDuration(value()); err == nil && d >= time.Second && d <= time.Hour {
 						next.PollInterval = d
+					}
+				case strings.HasPrefix(line, "usage_derived_session_enabled:"):
+					v := value()
+					next.DerivedSessionEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
+				case strings.HasPrefix(line, "usage_derived_session_window:"):
+					if d, err := time.ParseDuration(value()); err == nil && d > 0 {
+						next.DerivedSessionWindow = d
 					}
 				}
 			}
@@ -183,11 +196,13 @@ func reopenStore(cfg trackerConfig) {
 		return
 	}
 	next, err := usagestats.Open(usagestats.Config{
-		DataPath:        cfg.DBPath,
-		RetentionDays:   cfg.RetentionDays,
-		FlushInterval:   cfg.FlushInterval,
-		FlushMaxRecords: cfg.FlushMaxRecords,
-		SyncOnRecord:    true,
+		DataPath:             cfg.DBPath,
+		RetentionDays:        cfg.RetentionDays,
+		FlushInterval:        cfg.FlushInterval,
+		FlushMaxRecords:      cfg.FlushMaxRecords,
+		SyncOnRecord:         true,
+		DerivedSessionEnabled: cfg.DerivedSessionEnabled,
+		DerivedSessionWindow:  cfg.DerivedSessionWindow,
 	})
 	if err != nil {
 		trackerWarnf("storage disabled (open %s: %v)", cfg.DBPath, err)

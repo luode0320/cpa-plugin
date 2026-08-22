@@ -27,6 +27,15 @@ type Config struct {
 	APIKeySecret                string
 	ResponseCompression         bool
 	ResponseCompressionMinBytes int
+	// DerivedSessionEnabled controls whether RecordUsageRecord falls back to
+	// a derived pseudo session_key (auth:<id>:<provider>:<alias>:<bucket>) when
+	// the host-delivered SessionKey is empty. Real SessionKey values always win;
+	// the derived key only fills the dashboard "会话" column when the host
+	// broadcast carries no session information at all.
+	DerivedSessionEnabled bool
+	// DerivedSessionWindow bounds the time bucket used by the derivation. A
+	// non-positive value is clamped to DefaultDerivedSessionWindow.
+	DerivedSessionWindow time.Duration
 }
 
 type configYAML struct {
@@ -50,6 +59,8 @@ func defaultConfig() Config {
 		APIKeySecret:                defaultAPIKeySecret,
 		ResponseCompression:         defaultResponseCompression,
 		ResponseCompressionMinBytes: defaultResponseCompressionMinBytes,
+		DerivedSessionEnabled:       true,
+		DerivedSessionWindow:        DefaultDerivedSessionWindow,
 	}
 }
 
@@ -91,6 +102,8 @@ func parseConfig(raw []byte) (Config, error) {
 	if input.ResponseCompressionMinBytes != nil {
 		cfg.ResponseCompressionMinBytes = *input.ResponseCompressionMinBytes
 	}
+	cfg.DerivedSessionEnabled = true
+	cfg.DerivedSessionWindow = DefaultDerivedSessionWindow
 	return normalizeConfig(cfg)
 }
 
@@ -113,6 +126,7 @@ func normalizeConfig(cfg Config) (Config, error) {
 	if cfg.ResponseCompressionMinBytes < 0 || cfg.ResponseCompressionMinBytes > maxResponseCompressionMinBytes {
 		return Config{}, fmt.Errorf("response_compression_min_bytes must be between 0 and %d", maxResponseCompressionMinBytes)
 	}
+	cfg.DerivedSessionWindow = NormalizeDerivedSessionWindow(cfg.DerivedSessionWindow)
 	absolute, err := filepath.Abs(filepath.Clean(cfg.DataPath))
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve data_path: %w", err)

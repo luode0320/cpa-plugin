@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -199,5 +200,185 @@ func TestRecordUsageRecordMalformed(t *testing.T) {
 
 	if err := store.RecordUsageRecord([]byte(`{not json`)); err == nil {
 		t.Fatal("expected error for malformed JSON")
+	}
+}
+
+// TestRecordUsageRecordDerivesAuthSession verifies the dashboard's "会话"
+// column gets a derived pseudo session_key when the host-delivered UsageRecord
+// carries no SessionKey. The shape must be auth:<auth>:<provider>:<alias>:w<bucket>
+// so it is visually distinct from real session keys (which the host prefixes
+// differently) and cannot be confused with a real sticky conversation ID.
+func TestRecordUsageRecordDerivesAuthSession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Config{
+		DataPath:             filepath.Join(dir, "usage-stats.db"),
+		RetentionDays:        365,
+		FlushInterval:        100 * time.Millisecond,
+		FlushMaxRecords:      10,
+		SyncOnRecord:         true,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	raw, _ := json.Marshal(map[string]any{
+		"Provider":     "openai-compatible-ainb",
+		"ExecutorType": "openaicompatexecutor",
+		"Model":        "gpt-5.6-sol",
+		"Alias":        "gpt-5.6-sol",
+		"AuthID":       "key-abc",
+		"AuthIndex":    "key-abc",
+		"AuthType":     "apikey",
+		"Source":       "https://api.example.com/v1",
+		"SessionKey":   "",
+		"RequestedAt":  time.Now().UTC().Add(-2 * time.Minute),
+		"Failed":       false,
+		"Detail": map[string]any{
+			"InputTokens":  int64(1000),
+			"OutputTokens": int64(500),
+			"TotalTokens":  int64(1500),
+		},
+	})
+	if err := store.RecordUsageRecord(raw); err != nil {
+		t.Fatalf("RecordUsageRecord: %v", err)
+	}
+
+	res := store.HandleQuery(http.MethodGet, "/requests", url.Values{"limit": []string{"10"}}, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/requests status=%d body=%s", res.Status, res.Body)
+	}
+	var page RequestPage
+	if err := json.Unmarshal(res.Body, &page); err != nil {
+		t.Fatalf("/requests decode: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("/requests Total=%d want 1", page.Total)
+	}
+	got := page.Items[0].Dimensions.SessionKey
+	if !strings.HasPrefix(got, DerivedSessionKeyPrefix) {
+		t.Fatalf("session_key=%q want derived prefix %q", got, DerivedSessionKeyPrefix)
+	}
+	if !strings.Contains(got, "key-abc") {
+		t.Errorf("session_key=%q must contain AuthIndex", got)
+	}
+	if !strings.Contains(got, "openai-compatible-ainb") {
+		t.Errorf("session_key=%q must contain Provider", got)
+	}
+	if !strings.Contains(got, "gpt-5.6-sol") {
+		t.Errorf("session_key=%q must contain Alias", got)
+	}
+}
+
+// TestRecordUsageRecordDerivedSessionYieldsToRealSession verifies a host
+// SessionKey is preserved untouched: the derived fallback must not overwrite a
+// real value. This is the "host gained session awareness" path — the moment
+// F:\CLIProxyAPI starts emitting SessionKey, the dashboard's real key shows
+// through without any code change here.
+func TestRecordUsageRecordDerivedSessionYieldsToRealSession(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Config{
+		DataPath:             filepath.Join(dir, "usage-stats.db"),
+		RetentionDays:        365,
+		FlushInterval:        100 * time.Millisecond,
+		FlushMaxRecords:      10,
+		SyncOnRecord:         true,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	realKey := "execution:abc123-real-session-from-host"
+	raw, _ := json.Marshal(map[string]any{
+		"Provider":    "openai-compatible-ainb",
+		"ExecutorType": "openaicompatexecutor",
+		"Model":       "gpt-5.6-sol",
+		"Alias":       "gpt-5.6-sol",
+		"AuthID":      "key-abc",
+		"AuthIndex":   "key-abc",
+		"AuthType":    "apikey",
+		"Source":      "https://api.example.com/v1",
+		"SessionKey":  realKey,
+		"RequestedAt": time.Now().UTC().Add(-2 * time.Minute),
+		"Failed":      false,
+		"Detail": map[string]any{
+			"InputTokens":  int64(1000),
+			"OutputTokens": int64(500),
+			"TotalTokens":  int64(1500),
+		},
+	})
+	if err := store.RecordUsageRecord(raw); err != nil {
+		t.Fatalf("RecordUsageRecord: %v", err)
+	}
+
+	res := store.HandleQuery(http.MethodGet, "/requests", url.Values{"limit": []string{"10"}}, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/requests status=%d body=%s", res.Status, res.Body)
+	}
+	var page RequestPage
+	if err := json.Unmarshal(res.Body, &page); err != nil {
+		t.Fatalf("/requests decode: %v", err)
+	}
+	if got := page.Items[0].Dimensions.SessionKey; got != realKey {
+		t.Fatalf("real SessionKey was overwritten: got=%q want=%q", got, realKey)
+	}
+}
+
+// TestRecordUsageRecordDerivedSessionDisabled verifies the operator can
+// disable the derivation (set usage_derived_session_enabled=false). With it
+// off the dashboard renders "—" exactly as before, so the upgrade is opt-in.
+func TestRecordUsageRecordDerivedSessionDisabled(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Config{
+		DataPath:             filepath.Join(dir, "usage-stats.db"),
+		RetentionDays:        365,
+		FlushInterval:        100 * time.Millisecond,
+		FlushMaxRecords:      10,
+		SyncOnRecord:         true,
+		DerivedSessionEnabled: false,
+		DerivedSessionWindow:  30 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer store.Close()
+
+	raw, _ := json.Marshal(map[string]any{
+		"Provider":     "openai-compatible-ainb",
+		"ExecutorType": "openaicompatexecutor",
+		"Model":        "gpt-5.6-sol",
+		"Alias":        "gpt-5.6-sol",
+		"AuthID":       "key-abc",
+		"AuthIndex":    "key-abc",
+		"AuthType":     "apikey",
+		"Source":       "https://api.example.com/v1",
+		"SessionKey":   "",
+		"RequestedAt":  time.Now().UTC().Add(-2 * time.Minute),
+		"Failed":       false,
+		"Detail": map[string]any{
+			"InputTokens":  int64(100),
+			"OutputTokens": int64(50),
+			"TotalTokens":  int64(150),
+		},
+	})
+	if err := store.RecordUsageRecord(raw); err != nil {
+		t.Fatalf("RecordUsageRecord: %v", err)
+	}
+
+	res := store.HandleQuery(http.MethodGet, "/requests", url.Values{"limit": []string{"10"}}, nil, nil)
+	if res.Status != http.StatusOK {
+		t.Fatalf("/requests status=%d body=%s", res.Status, res.Body)
+	}
+	var page RequestPage
+	if err := json.Unmarshal(res.Body, &page); err != nil {
+		t.Fatalf("/requests decode: %v", err)
+	}
+	if got := page.Items[0].Dimensions.SessionKey; got != "" {
+		t.Fatalf("session_key=%q want empty when derivation disabled", got)
 	}
 }
