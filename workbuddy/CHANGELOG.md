@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.5
+
+### Rename — 插件显示名 `WorkBuddy` → `WorkBuddy Provider`
+
+3 插件因 cpa-workbuddy-plugin 项目整体改名，registry 显示名一起区分避免
+与旧同名插件混淆。`id` 保持 `workbuddy` 不变，所以已装的旧实例不会被新
+release 替换（安装记录靠 `id` 寻址）。
+
+- `registry.json`：`name` 字段 `WorkBuddy` → `WorkBuddy Provider`
+- `var version`/`VERSION`：0.9.4 → 0.9.5
+- 历史 release `workbuddy-v0.9.4` 已 delete，新 release `workbuddy-v0.9.5` 接管 registry
+
+> 配套改动同 commit：`qoderwork` 0.2.6 → 0.2.7（显示名 `QoderWork Provider`）、
+> `token-usage-tracker` 0.1.5 → 0.1.6（显示名 `WorkBuddy Token Usage`）。
+
 ## 0.9.4
 
 ### Fix — 共享 feed 中 `source` / `service_tier` 字段语义对调

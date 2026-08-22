@@ -3,7 +3,7 @@
   "plugins": [
     {
       "id": "workbuddy",
-      "name": "WorkBuddy",
+      "name": "WorkBuddy Provider",
       "description": "Tencent CodeBuddy (WorkBuddy) OAuth provider for CLIProxyAPI: multi-account login, dynamic models, chat executor, CN daily check-in, Global one-shot expert trial (manual), credit lifecycle (disable CN / delete Global when exhausted), credits panel with CN/Global filters, optional credits-aware scheduler.",
       "author": "Sliverkiss",
       "version": "0.9.4",
@@ -75,7 +75,7 @@
     },
     {
       "id": "qoderwork",
-      "name": "QoderWork",
+      "name": "QoderWork Provider",
       "description": "QoderWork CN (qoder.com.cn) provider for CLIProxyAPI: dual login (OAuth device authorization with auto pro-pack claim + PAT import), COSY-signed chat executor, dynamic model list, daily check-in with credit snapshot, token keepalive (deviceToken/jobToken prefix-routed, PAT fallback), accounts panel.",
       "author": "Sliverkiss",
       "version": "0.2.6",
@@ -147,7 +147,7 @@
     },
     {
       "id": "token-usage-tracker",
-      "name": "token-usage-tracker",
+      "name": "WorkBuddy Token Usage",
       "description": "Token usage dashboard for workbuddy accounts (real consumption from the shared usage feed): per-model/account stats, trends, requests, costs. Third plugin of cpa-plugin.",
       "version": "0.1.5",
       "author": "luode (statistics core ported from AITNR/cap-token-usage-tracker)",
