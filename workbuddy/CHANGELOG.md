@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.7
+
+### Fix — 批量导入 UI 报错 `Failed to execute 'json' on 'Response'`
+
+v0.9.6 起批量导入（多文件选择）面板在批量循环中常报
+`Failed to execute 'json' on 'Response': Unexpected end of JSON input`，
+6 个文件整批失败。根因：`api()` 函数 `return r.json()` 在响应 body 为空或
+非 JSON（host 中间层异常、空响应、HTML 错误页）时直接抛 `SyntaxError`，
+把"哪个文件 / 哪次请求失败 + HTTP 状态 + body 预览"这种关键调试信息吞成
+JS 异常，导致**单次坏响应拖垮整批**（6/6 失败）。
+
+- **`api()` 健壮化**（`panel.html:636-650`）：改为先 `await r.text()`，按
+  `Content-Type` 分流——空 body / 非 JSON / JSON 解析失败均返回结构化
+  `{error: "<HTTP 状态> (<content-type>): <body 前 200 字>"}`，不再 throw。
+  401/403 仍按原语义 throw（认证/IP 封禁是终态，不该被批量循环吞掉）。
+- **失败可观察**：批量导入的失败明细现在能告诉用户"第 3 个文件 HTTP 503
+  empty response"这类真因，而不是千篇一律的 SyntaxError，方便定位是
+  host 中间件还是上游上游 API 的问题。
+- 其他插件面板端点（accounts / credits / checkin / trial / select / toggle
+  / keepalive / refresh）共享同一 `api()`，同步受益——任意端点拿到空或非
+  JSON 响应时 UI 不再白屏。
+
 ## 0.9.6
 
 ### Rename — plugin `id` `workbuddy` → `workbuddy-provider`

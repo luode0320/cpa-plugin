@@ -634,7 +634,19 @@ async function api(path, opts={}){
     throw new Error(body.trim()||"禁止访问 (403)");
   }
   authFailCount=0;
-  return r.json();
+  /* Robust JSON decode: empty / non-JSON / parse-failure must NOT throw
+     SyntaxError to the caller — return a structured {error: ...} so the
+     batch import (and other loops) can surface the real HTTP status &
+     body preview instead of crashing the whole batch on one bad response. */
+  const _ct=(r.headers.get('content-type')||'').toLowerCase();
+  const _text=await r.text();
+  if(!_text){return {error:`empty response (HTTP ${r.status} ${r.statusText||''})`}}
+  if(!_ct.includes('application/json')){
+    return {error:`non-JSON response (HTTP ${r.status} ${_ct||'no content-type'}): ${_text.slice(0,200)}`}
+  }
+  try{return JSON.parse(_text)}catch(_e){
+    return {error:`bad JSON (HTTP ${r.status}): ${_text.slice(0,200)}`}
+  }
 }
 async function load(force, btn){
   const g=document.getElementById("grid");
