@@ -56,7 +56,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .bar .search::placeholder{color:var(--placeholder)}
 .bar .sort-btn{font-size:13px;white-space:nowrap}
 .bar .sort-btn.active{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid{display:grid;grid-template-columns:repeat(3, minmax(0, 1fr));gap:16px}
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
 .card.selected{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc-ring)}
@@ -223,6 +223,8 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">CN <span class="cnt" id="cntCn">0</span></button>
     <button type="button" class="ftag" data-region="global" onclick="filterRegion('global',this)">Global <span class="cnt" id="cntGlobal">0</span></button>
     <button type="button" class="ftag" data-region="exhausted" onclick="filterRegion('exhausted',this)">耗尽 <span class="cnt" id="cntExhausted">0</span></button>
+    <button type="button" class="ftag" data-region="disabled" onclick="filterRegion('disabled',this)">已禁用 <span class="cnt" id="cntDisabled">0</span></button>
+    <button type="button" class="ftag" data-region="preserve" onclick="filterRegion('preserve',this)">保号 <span class="cnt" id="cntPreserve">0</span></button>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
   <div id="grid" class="grid"><div class="loading">加载中…</div></div>
@@ -392,9 +394,6 @@ function card(a){
     const btnDisabled=checked?" disabled=\"disabled\"":"";
     actionHTML=`<button class="${btnClass}" data-action="checkin" data-auth-index="${esc(a.auth_index)}"${btnDisabled}>${btnText}</button>`;
   }
-  const selectBtn=selected
-    ? `<button class="done" disabled="disabled">使用中</button>`
-    : (disabled?``:`<button class="sec" data-action="select" data-auth-index="${esc(a.auth_index)}">选用</button>`);
   const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
   // Manual enable/disable toggle. Disabled accounts show "启用"; live accounts
   // show a danger-styled "禁用". Disabling the active account is allowed — the
@@ -403,13 +402,13 @@ function card(a){
     ? `<button class="sec" data-action="toggle" data-auth-index="${esc(a.auth_index)}">启用</button>`
     : `<button class="danger" data-action="toggle" data-auth-index="${esc(a.auth_index)}" title="禁用后该账号不再参与路由选择">禁用</button>`;
   const preserveBadge=a.preserve?`<span class="badge preserve" title="watchdog 检测到积分不足，账号暂停路由以保留积分别耗尽">保号</span>`:"";
-  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+preserveBadge+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
-  return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}" data-nickname="${esc(a.nickname||a.label||a.name||"")}" data-label="${esc(a.label||"")}" data-name="${esc(a.name||"")}" data-uid="${esc(a.uid||"")}">
+  const badges=(disabled?`<span class="badge disabled">已禁用</span>`:"")+preserveBadge+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
+  return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}" data-nickname="${esc(a.nickname||a.label||a.name||"")}" data-label="${esc(a.label||"")}" data-name="${esc(a.name||"")}" data-uid="${esc(a.uid||"")}" data-disabled="${disabled?"1":"0"}" data-preserve="${a.preserve?"1":"0"}">
   <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
-  <div class="actions">${selectBtn}${refreshBtn}${actionHTML}${toggleBtn}</div>
+  <div class="actions">${refreshBtn}${actionHTML}${toggleBtn}</div>
   </div>`;
 }
 let currentFilter="all";
@@ -475,6 +474,8 @@ function applyCardVisibility(){
     let show=true;
     if(currentFilter==="all") show=true;
     else if(currentFilter==="exhausted") show=c.querySelector(".badge.exhausted")!=null;
+    else if(currentFilter==="disabled") show=c.dataset.disabled==="1";
+    else if(currentFilter==="preserve") show=c.dataset.preserve==="1";
     else show=r===currentFilter;
     if(show&&q){
       const hay=((c.dataset.nickname||"")+" "+(c.dataset.label||"")+" "+(c.dataset.name||"")+" "+(c.dataset.uid||"")).toLowerCase();
@@ -578,25 +579,37 @@ function filterRegion(region, btn){
   renderSummary(lastAccounts);
 }
 function updateFilterCounts(accounts){
-  let cn=0, gl=0, ex=0;
+  let cn=0, gl=0, ex=0, dis=0, prs=0;
   (accounts||[]).forEach(a=>{
     if((a.region||"cn")==="global") gl++; else cn++;
     if(a.exhausted||(a.credits&&a.credits.total_remain===0&&(a.credits.total_used>0||(a.credits.packages&&a.credits.packages.length)))) ex++;
+    if(a.disabled) dis++;
+    if(a.preserve) prs++;
   });
   const elAll=document.getElementById("cntAll");
   const elCn=document.getElementById("cntCn");
   const elGl=document.getElementById("cntGlobal");
   const elEx=document.getElementById("cntExhausted");
+  const elDis=document.getElementById("cntDisabled");
+  const elPrs=document.getElementById("cntPreserve");
   if(elAll) elAll.textContent=String((accounts||[]).length);
   if(elCn) elCn.textContent=String(cn);
   if(elGl) elGl.textContent=String(gl);
   if(elEx) elEx.textContent=String(ex);
+  if(elDis) elDis.textContent=String(dis);
+  if(elPrs) elPrs.textContent=String(prs);
 }
 function accountsForFilter(accounts){
   const list=accounts||[];
   if(currentFilter==="all") return list;
   if(currentFilter==="exhausted"){
     return list.filter(a=>a.exhausted||(a.credits&&a.credits.total_remain===0&&(a.credits.total_used>0||(a.credits.packages&&a.credits.packages.length))));
+  }
+  if(currentFilter==="disabled"){
+    return list.filter(a=>!!a.disabled);
+  }
+  if(currentFilter==="preserve"){
+    return list.filter(a=>!!a.preserve);
   }
   return list.filter(a=>(a.region||"cn")===currentFilter);
 }
