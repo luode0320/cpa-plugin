@@ -50,13 +50,15 @@ func TestAuthFileNameFor_UsesPrefixConstant(t *testing.T) {
 	}
 }
 
-// TestAuthFileNameFor_NilUID_LegacyFallback documents that when UID is empty
-// (legacy single-account era) the fallback name (authFileName in main.go) is
-// also rooted under the same disk prefix — otherwise the prefix-based filter
-// would still skip the legacy file.
+// TestAuthFileNameFor_NilUID_LegacyFallback documents the legacy single-account
+// fallback: when UID is empty, authFileNameFor returns the bare authFileName
+// ("workbuddy.json") — which does NOT carry the authFilePrefix dash. That's by
+// design: legacy files are identified by isLegacyWorkbuddyAuthName and migrated
+// to the canonical workbuddy-<uid>.json name by resolveAuthFileTarget. They are
+// never expected to match the prefix filter, so do NOT assert a prefix here.
 func TestAuthFileNameFor_NilUID_LegacyFallback(t *testing.T) {
 	got := authFileNameFor(nil)
-	if !strings.HasPrefix(got, authFilePrefix) {
-		t.Fatalf("legacy fallback name %q does not start with authFilePrefix=%q; this would exclude the legacy file from the panel list", got, authFilePrefix)
+	if !isLegacyWorkbuddyAuthName(got) {
+		t.Fatalf("authFileNameFor(nil)=%q; want the legacy authFileName that isLegacyWorkbuddyAuthName recognizes (migrated by resolveAuthFileTarget, not prefix-matched)", got)
 	}
 }
