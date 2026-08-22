@@ -1,6 +1,50 @@
 # Changelog
 
+## 0.12.1
+
+### Fix — 保号 watchdog 首 tick 与宿主初始化竞态
+
+`init()` 启动的 watchdog goroutine 早于宿主调用 `cliproxy_plugin_init`
+设置 `hostAPI`，导致首 tick 的 `hostAuthList()` 走到 `host API unavailable`
+分支被吞、下一次要等满 `preserve_watchdog_interval`（默认 10m）。期间任意
+跌破 `preserve_threshold`（默认 50）的账号都看不到保号 badge，会被路由
+继续吃光积分。10 分钟后才被"补上"，体验割裂。
+
+三道防线确保"插件生效即识别保号"：
+
+1. **`watchdog.go` 首 tick 等宿主就绪** — 新增
+   `hostReadyForWatchdog()` 探针（`hostBridgeAvailable()` +
+   `hostAuthList()` 双信号），`preserveWatchdogLoop` 启动时先调用
+   `waitHostReadyForWatchdog(15s, ...)` 轮询 250ms；首 tick 之前 drain
+   一次 `preserveTickCh` 防止与 wait 期间排队的 trigger 立即双跑。
+2. **`configure()` register/reconfigure 触发一次 tick** — 在
+   `setPreserveConfig` 之后调用 `requestPreserveTick()`，保证新阈值/间隔
+   立即生效，也保证首次注册时无须再等 10 分钟。`preserveTickCh` 是
+   buffered cap 1，reconfigure 风暴自动合并为单次。
+3. **面板强制刷新同步 reconcile** — `buildDashboardEx(force=true)` 用
+   本次响应已拉到的 `credits`（无需再打上游）调
+   `preserveReconcileFromAccounts(out)`，紧接重镜像一次
+   `refreshPreserveSetFromDisk()`，让本次响应的 badge 与磁盘完全一致。
+   用户主动点"刷新"看到的 badge 永远正确。
+
+### 涉及文件
+
+- `workbuddy/watchdog.go` — `hostReadyForWatchdog` /
+  `waitHostReadyForWatchdog` / `preserveTickCh` / `requestPreserveTick` /
+  `preserveFlipDecision` / `preserveFlipsNeeded` / `preserveApplyFlips` /
+  `preserveReconcileFromAccounts`；`preserveWatchdogLoop` 重写为
+  `timer + chan select`。
+- `workbuddy/usage_config.go` — `configure()` 末尾
+  `requestPreserveTick()`。
+- `workbuddy/panel.go` — `buildDashboardEx` 在 `force=true` 时
+  `preserveReconcileFromAccounts(out)` + 重镜像。
+- `workbuddy/watchdog_test.go` — 新增 3 个测试：
+  `TestWaitHostReadyForWatchdog`（4 case 覆盖立即 true / 第二次 true /
+  maxWait=0 假 / 超时 false）、`TestRequestPreserveTickCoalesces`（3 发
+  合并为 1）、`TestPreserveFlipsNeeded`（5 case 覆盖进入/退出/不动/无 credits）。
+
 ## 0.12.0
+
 
 ### Breaking Change — 移除三池路由（priority / default / fallback），只留保号池
 

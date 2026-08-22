@@ -179,6 +179,17 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 	// truth. refreshPreserveSetFromDisk also prunes entries for accounts that
 	// no longer exist so the scheduler can't pin a session to a deleted auth.
 	preserveSize := refreshPreserveSetFromDisk()
+	// On force refresh, reconcile preserve flags against the already-fetched
+	// credits so the badges in THIS response are correct without waiting for
+	// the next watchdog interval. Zero extra upstream QPS — `out` carries the
+	// credits the dashboard just pulled (v0.12.1: closes the "刷新后 badge
+	// 还是旧状态" gap caused by the first-tick init race and 10m blind window).
+	if force {
+		preserveReconcileFromAccounts(out)
+		// Re-mirror so the badge loop below sees the freshly-written disk
+		// flags instead of the pre-write in-memory snapshot.
+		preserveSize = refreshPreserveSetFromDisk()
+	}
 	// Aggregate credits for panel/API consumers (all accounts currently in out).
 	sum := summarizeCredits(out)
 	// Mark selected account in list for UI; preserve comes from the disk mirror.

@@ -243,3 +243,139 @@ func TestEvictSessionBindingsForAuth(t *testing.T) {
 		t.Fatalf("call-2 should stay on wb-b, got %q", stillB.AuthID)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// v0.12.1: first-tick race fix
+// ---------------------------------------------------------------------------
+
+// TestWaitHostReadyForWatchdog covers the startup-readiness probe used to
+// close the init-race blind window. Four cases:
+//   - always-ready returns true immediately, no sleep;
+//   - becomes-ready-on-second-call still returns true and ends in <maxWait;
+//   - never-ready with maxWait=0 returns ready() right away (no goroutine);
+//   - never-ready with a tight maxWait returns false (proves the deadline
+//     is honored and we don't loop forever).
+func TestWaitHostReadyForWatchdog(t *testing.T) {
+	// Case 1: always-ready, short maxWait — instant true, zero sleeps.
+	calls := 0
+	ready := func() bool { calls++; return true }
+	if !waitHostReadyForWatchdog(50*time.Millisecond, ready) {
+		t.Fatal("always-ready should return true")
+	}
+	if calls != 1 {
+		t.Fatalf("expected one ready() call, got %d", calls)
+	}
+
+	// Case 2: becomes-ready on the second call. Probes at least twice
+	// and returns true in <maxWait.
+	calls = 0
+	ready = func() bool { calls++; return calls >= 2 }
+	if !waitHostReadyForWatchdog(2*time.Second, ready) {
+		t.Fatal("eventually-ready should return true")
+	}
+	if calls < 2 {
+		t.Fatalf("expected at least 2 probes, got %d", calls)
+	}
+
+	// Case 3: never-ready, maxWait=0 — returns whatever ready() says,
+	// without sleeping. One call, no goroutine.
+	calls = 0
+	ready = func() bool { calls++; return false }
+	if waitHostReadyForWatchdog(0, ready) {
+		t.Fatal("maxWait=0 + never-ready must return false")
+	}
+	if calls != 1 {
+		t.Fatalf("maxWait=0 must probe exactly once, got %d", calls)
+	}
+
+	// Case 4: never-ready with a tight maxWait — returns false once the
+	// deadline passes. Without the deadline guard this would loop forever.
+	calls = 0
+	ready = func() bool { calls++; return false }
+	start := time.Now()
+	if waitHostReadyForWatchdog(20*time.Millisecond, ready) {
+		t.Fatal("never-ready under a finite maxWait must return false")
+	}
+	elapsed := time.Since(start)
+	if elapsed > 200*time.Millisecond {
+		t.Fatalf("wait overshot the deadline: %v", elapsed)
+	}
+	if calls < 1 {
+		t.Fatalf("never-ready should be probed at least once, got %d", calls)
+	}
+}
+
+// TestRequestPreserveTickCoalesces proves the trigger channel collapses
+// concurrent requesters onto a single queued tick — protects the upstream
+// billing API from reconfigure/panel storms (v0.12.1 contract).
+func TestRequestPreserveTickCoalesces(t *testing.T) {
+	// Drain anything queued by a previous test (the chan is package-global).
+	for {
+		select {
+		case <-preserveTickCh:
+		default:
+			goto drained
+		}
+	}
+drained:
+	// Three requests in rapid succession — buffered cap 1 means only one
+	// value may queue; the other two drop on default.
+	requestPreserveTick()
+	requestPreserveTick()
+	requestPreserveTick()
+	select {
+	case <-preserveTickCh:
+		// OK — exactly one queued.
+	default:
+		t.Fatal("expected at least one tick queued after coalesced requests")
+	}
+	// Re-check: no second value should be sitting in the channel.
+	select {
+	case <-preserveTickCh:
+		t.Fatal("requestPreserveTick must coalesce; got a second queued value")
+	default:
+	}
+}
+
+// TestPreserveFlipsNeeded is the decision table for the panel-side
+// reconcile path. Same threshold contract as the watchdog (remain<threshold
+// → preserve) and must skip no-ops so we don't churn disk writes on every
+// panel refresh.
+func TestPreserveFlipsNeeded(t *testing.T) {
+	mkAcct := func(id string, remain int64, total int64, currently bool) wbAccount {
+		return wbAccount{
+			AuthIndex: id + "-idx",
+			AuthID:    id,
+			Preserve:  currently,
+			Credits:   &creditsSummary{TotalRemain: remain, TotalSize: total},
+		}
+	}
+	cases := []struct {
+		name    string
+		account wbAccount
+		want    *preserveFlipDecision // nil = no flip
+	}{
+		{"below threshold, currently free → enter preserve",
+			mkAcct("wb-low", 27, 200, false), &preserveFlipDecision{AuthIndex: "wb-low-idx", AuthID: "wb-low", Preserve: true}},
+		{"below threshold, currently preserved → no flip",
+			mkAcct("wb-already", 10, 200, true), nil},
+		{"recovered above threshold, currently preserved → exit preserve",
+			mkAcct("wb-recov", 120, 200, true), &preserveFlipDecision{AuthIndex: "wb-recov-idx", AuthID: "wb-recov", Preserve: false}},
+		{"above threshold, currently free → no flip",
+			mkAcct("wb-healthy", 200, 200, false), nil},
+		{"no credits snapshot → skip (never auto-flag unknown)",
+			wbAccount{AuthIndex: "wb-unk-idx", AuthID: "wb-unk"}, nil},
+	}
+	threshold := int64(50)
+	for _, c := range cases {
+		flips := preserveFlipsNeeded([]wbAccount{c.account}, threshold)
+		switch {
+		case c.want == nil && len(flips) != 0:
+			t.Errorf("%s: expected no flips, got %+v", c.name, flips)
+		case c.want != nil && len(flips) != 1:
+			t.Errorf("%s: expected one flip, got %+v", c.name, flips)
+		case c.want != nil && (flips[0].AuthIndex != c.want.AuthIndex || flips[0].AuthID != c.want.AuthID || flips[0].Preserve != c.want.Preserve):
+			t.Errorf("%s: flip=%+v want=%+v", c.name, flips[0], *c.want)
+		}
+	}
+}

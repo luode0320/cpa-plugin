@@ -187,6 +187,13 @@ func configure(raw []byte) {
 	// take effect at the next tick without restarting the goroutine.
 	setPreserveConfig(nextPreserveThreshold, nextPreserveInterval, nextPreserveEnabled)
 
+	// Drop a non-blocking tick request so the freshly (re)configured
+	// threshold/interval apply immediately rather than after a full interval
+	// (v0.12.1: closes the "register just changed something, why does the
+	// badge still show the old state?" UX gap). Reconfigure storms collapse
+	// onto one tick via requestPreserveTick's buffered chan cap 1.
+	requestPreserveTick()
+
 	// Shared usage feed for the standalone token-usage-tracker plugin.
 	// Parses usage_feed_* fields from the same config_yaml. Non-fatal by
 	// design: a failure only disables the feed, never chat.
