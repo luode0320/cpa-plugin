@@ -1,6 +1,6 @@
 // Package main implements the token-usage-tracker CLIProxyAPI dynamic plugin.
 //
-// token-usage-tracker is the third plugin of the cpa-plugin project (beside
+// token-usage-tracker is the third plugin of the cpa-workbuddy-plugin project (beside
 // workbuddy and qoderwork). It records and visualizes real token consumption
 // of workbuddy accounts.
 //
@@ -180,7 +180,7 @@ func trackerRegistration() registration {
 			Name:             providerName,
 			Version:          version,
 			Author:           "luode (statistics core ported from AITNR/cap-token-usage-tracker)",
-			GitHubRepository: "https://github.com/luode0320/cpa-plugin",
+			GitHubRepository: "https://github.com/luode0320/cpa-workbuddy-plugin",
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "management_key", Type: pluginapi.ConfigFieldTypeString, Description: "Bearer token required for write endpoints (prices/reset/backup/restore). Empty disables the plugin-layer gate. Also env TOKEN_USAGE_TRACKER_MANAGEMENT_KEY."},

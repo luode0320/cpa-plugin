@@ -1,6 +1,6 @@
 # token-usage-tracker
 
-本项目（`cpa-plugin`）的**第三个插件**（与 `workbuddy`、`qoderwork` 并列）：
+本项目（`cpa-workbuddy-plugin`）的**第三个插件**（与 `workbuddy`、`qoderwork` 并列）：
 记录并可视化 **workbuddy 账户的真实 token 消耗**（实盘数据）。
 
 ## 数据链路
@@ -30,7 +30,7 @@ workbuddy 插件                        token-usage-tracker 插件
 ## 安装
 
 从插件商店（registry 源
-`https://raw.githubusercontent.com/luode0320/cpa-plugin/main/registry.json`）
+`https://raw.githubusercontent.com/luode0320/cpa-workbuddy-plugin/main/registry.json`）
 搜索 **token-usage-tracker** 安装即可。与 workbuddy 同时安装后开箱即用：
 dashboard 读接口与写接口全部在注册表中显式声明，不会出现 404。
 

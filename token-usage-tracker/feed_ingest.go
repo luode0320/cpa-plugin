@@ -33,7 +33,7 @@ import (
 	"sync"
 	"time"
 
-	usagestats "github.com/sliverkiss/token-usage-tracker/usage_stats"
+	usagestats "github.com/luode0320/cpa-workbuddy-plugin/token-usage-tracker/usage_stats"
 )
 
 const (

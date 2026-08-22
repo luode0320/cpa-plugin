@@ -1,4 +1,4 @@
-module github.com/sliverkiss/workbuddy-plus
+module github.com/luode0320/cpa-workbuddy-plugin/workbuddy
 
 go 1.26.0
 

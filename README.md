@@ -1,4 +1,4 @@
-# cpa-plugin — CLIProxyAPI 插件集合
+# cpa-workbuddy-plugin — CLIProxyAPI 插件集合
 
 [CLIProxyAPI (CPA)](https://github.com/router-for-me/CLIProxyAPI) 的 Go 插件仓库，将多个 AI 服务封装为 **OpenAI 兼容 provider** 供 CPA 网关统一调度：多账号管理、动态模型、流式推理、每日签到、积分生命周期、token 用量统计。目前包含 **3 个并列插件**，每个插件独立版本、独立发布。
 
@@ -70,7 +70,7 @@ workbuddy 插件                         token-usage-tracker 插件
 ## 仓库结构
 
 ```text
-cpa-plugin/
+cpa-workbuddy-plugin/
 ├── workbuddy/              # 插件 1：腾讯 CodeBuddy provider（含测试与 CHANGELOG）
 ├── qoderwork/              # 插件 2：QoderWork CN provider（含 baseprompt.json 模板）
 ├── token-usage-tracker/    # 插件 3：token 用量 dashboard（usage_stats/ 统计核心）
@@ -125,7 +125,7 @@ checksums.txt
 CPA 插件商店添加自定义源：
 
 ```text
-https://raw.githubusercontent.com/luode0320/cpa-plugin/main/registry.json
+https://raw.githubusercontent.com/luode0320/cpa-workbuddy-plugin/main/registry.json
 ```
 
 然后在商店 UI 安装/更新 **workbuddy**、**qoderwork**、**token-usage-tracker**。

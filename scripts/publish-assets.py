@@ -30,7 +30,7 @@ PLATFORMS = [
     "windows_arm64",
 ]
 
-RAW_BASE = "https://raw.githubusercontent.com/luode0320/cpa-plugin/main/release-assets"
+RAW_BASE = "https://raw.githubusercontent.com/luode0320/cpa-workbuddy-plugin/main/release-assets"
 
 
 def sha256_of(path: pathlib.Path) -> str:

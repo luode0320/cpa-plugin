@@ -1,4 +1,4 @@
-module github.com/Sliverkiss/cpa-plugin/qoderwork
+module github.com/luode0320/cpa-workbuddy-plugin/qoderwork
 
 go 1.26.0
 

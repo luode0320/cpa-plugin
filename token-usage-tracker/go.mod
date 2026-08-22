@@ -1,4 +1,4 @@
-module github.com/sliverkiss/token-usage-tracker
+module github.com/luode0320/cpa-workbuddy-plugin/token-usage-tracker
 
 go 1.26.0
 
