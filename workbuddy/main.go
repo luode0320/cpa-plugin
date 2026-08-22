@@ -336,7 +336,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.13.0"
+var version = "0.13.1"
 
 func wbRegistration() registration {
 	return registration{
@@ -694,6 +694,14 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if accountLabel == "" {
 		accountLabel = authUID
 	}
+	// Stable per-conversation key forwarded to the tracker dashboard's
+	// "会话" (session) column so users can tell at a glance whether two rows
+	// came from the same stickiness-bound conversation. Extracted from the
+	// same priority chain scheduler.pick uses (extractSessionKeyFromSources
+	// here, extractSessionKey on the scheduler side). Frozen across the
+	// per-request account-failover loop because the underlying req does not
+	// change between attempts.
+	sessionKey := extractSessionKeyFromSources(req.Headers, req.Metadata)
 	// CodeBuddy rejects non-stream requests (code 11101), so always stream
 	// upstream and fold the chunks into a single chat.completion object.
 	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
@@ -757,7 +765,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		// After exhausting retries (or a non-account-level error), mirror
 		// the historical accounting path: note the failure on the LAST
 		// account actually contacted and propagate the error.
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, parseUpstreamStatusFromErr(completionErr), completionErr.Error(), reasoningEffort, 0, accountLabel)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, parseUpstreamStatusFromErr(completionErr), completionErr.Error(), reasoningEffort, 0, accountLabel, sessionKey)
 		reconcileAfterExecutorError(usedAuthID, parseUpstreamStatusFromErr(completionErr), completionErr.Error())
 		if parseUpstreamStatusFromErr(completionErr) == 0 {
 			noteAccountFailure(usedAuthID, 0, completionErr.Error())
@@ -766,7 +774,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	}
 	// Success path: credit invalidation + failover counter reset use
 	// the actual account that served the request.
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, 0, accountLabel)
+	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, 0, accountLabel, sessionKey)
 	invalidateAccountCredits(usedAuthID, authUID)
 	resetAccountFailover(usedAuthID)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
@@ -801,6 +809,10 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if accountLabel == "" {
 		accountLabel = authUID
 	}
+	// Same per-conversation key as handleExecExecute; see that function for the
+	// rationale. Pumped downstream into pumpUpstreamStream so SSE rows carry
+	// the session identity too.
+	sessionKey := extractSessionKeyFromSources(req.Headers, req.Metadata)
 	body := req.Payload
 	if len(body) == 0 {
 		body = req.OriginalRequest
@@ -817,7 +829,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		collector := &sseUsageCollector{}
 		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector)
 		if errCollect != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error(), reasoningEffort, collector.ttftNS(started), accountLabel)
+			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error(), reasoningEffort, collector.ttftNS(started), accountLabel, sessionKey)
 			// statusCode >= 400 already went through reconcileByUID inside
 			// collectUpstreamStream; only transport-level failures need the
 			// failover note here.
@@ -826,7 +838,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 			}
 			return nil, errCollect
 		}
-		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), accountLabel)
+		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), accountLabel, sessionKey)
 		invalidateAccountCredits(req.AuthID, authUID)
 		resetAccountFailover(req.AuthID)
 		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
@@ -846,7 +858,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		return okEnvelope(streamResponse{Headers: headers})
 	}
 	backendHeaders(httpReq, sa)
-	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, accountLabel)
+	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, accountLabel, sessionKey)
 	return okEnvelope(streamResponse{Headers: headers})
 }
 

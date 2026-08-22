@@ -68,7 +68,7 @@ func decodeUsage(raw []byte, now time.Time) (normalizedUsage, error) {
 			Source:          safeUsageSource(firstString(root, "Source", "source"), apiKey, provider, executorType, authType),
 			APIKey:          normalizeDimension(apiKey),
 			AuthType:        authType,
-			ServiceTier:     normalizeDimension(firstString(root, "ServiceTier", "service_tier")),
+			SessionKey:      normalizeDimension(firstString(root, "SessionKey", "session_key")),
 			ReasoningEffort: normalizeDimension(firstString(root, "ReasoningEffort", "reasoning_effort")),
 			Failed:          failed,
 			FailureStatus:   clampStatus(firstInt64(failure, "StatusCode", "status_code")),

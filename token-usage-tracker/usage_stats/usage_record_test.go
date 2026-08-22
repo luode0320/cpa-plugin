@@ -28,7 +28,7 @@ func sampleUsageRecord(provider, executorType, model, authID string, failed bool
 		"AuthType":        "apikey",
 		"Source":          "https://api.example.com/v1",
 		"ReasoningEffort": "",
-		"ServiceTier":     "",
+		"SessionKey":      "",
 		"Generate":        true,
 		"RequestedAt":     time.Now().UTC().Add(-2 * time.Minute),
 		"Latency":         int64(1_500_000_000),

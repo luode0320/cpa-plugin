@@ -153,7 +153,7 @@
   "table.time": "時間",
   "table.model": "模型名稱",
   "table.source": "來源",
-  "table.tier": "Tier",
+  "table.session": "會話",
   "table.result": "結果",
   "table.ttft": "首字延遲",
   "table.generation": "生成時間",

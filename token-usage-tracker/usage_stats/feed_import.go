@@ -19,7 +19,7 @@ const usageFeedSourceServiceAddress = "https://www.codebuddy.cn"
 //	{"timestamp":"...","latency_ms":123,"source":"workbuddy","auth_index":"...",
 //	 "provider":"workbuddy","model":"...","alias":"...","auth_type":"oauth",
 //	 "executor_type":"workbuddy","failed":false,"status_code":200,
-//	 "service_tier":"","reasoning_effort":"high","ttft_ns":850000000,
+//	 "session_key":"execution:abc123def","reasoning_effort":"high","ttft_ns":850000000,
 //	 "tokens":{"input_tokens":..,"output_tokens":..,"reasoning_tokens":..,
 //	           "cached_tokens":..,"cache_read_tokens":..,
 //	           "cache_creation_tokens":..,"total_tokens":..}}
@@ -47,7 +47,7 @@ func decodeFeedLine(line string) (normalizedUsage, error) {
 		ExecutorType     string `json:"executor_type"`
 		Failed           bool   `json:"failed"`
 		StatusCode       int    `json:"status_code"`
-		ServiceTier      string `json:"service_tier"`
+		SessionKey       string `json:"session_key"`
 		ReasoningEffort  string `json:"reasoning_effort"`
 		TTFTNS           int64  `json:"ttft_ns"`
 		Tokens           struct {
@@ -99,10 +99,12 @@ func decodeFeedLine(line string) (normalizedUsage, error) {
 		strings.TrimSpace(raw.AuthIndex), requestedAt, latencyNS,
 		raw.Failed, raw.StatusCode, counters,
 	)
-	// Feed-only dimensions the producer populates: reasoning_effort (the value
-	// actually sent upstream) and ttft_ns (time-to-first-token). service_tier is
-	// reserved for future tiered pricing — the producer currently writes "".
-	usage.Dimensions.ServiceTier = normalizeDimension(strings.TrimSpace(raw.ServiceTier))
+	// Feed-only dimensions the producer populates: session_key (the same
+	// per-conversation key scheduler.pick used to pin the account so the
+	// dashboard's 会话 column surfaces whether rows come from the same
+	// stickiness-bound conversation), reasoning_effort (the value actually
+	// sent upstream) and ttft_ns (time-to-first-token).
+	usage.Dimensions.SessionKey = normalizeDimension(strings.TrimSpace(raw.SessionKey))
 	usage.Dimensions.ReasoningEffort = normalizeDimension(strings.TrimSpace(raw.ReasoningEffort))
 	usage.TTFTNS = positiveUint(raw.TTFTNS)
 	return usage, nil

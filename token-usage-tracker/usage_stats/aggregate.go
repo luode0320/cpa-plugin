@@ -21,7 +21,12 @@ type Dimensions struct {
 	APIKeyRef        string `json:"api_key_ref,omitempty"`
 	APIKeyStatus     string `json:"api_key_status,omitempty"`
 	AuthType         string `json:"auth_type"`
-	ServiceTier      string `json:"service_tier"`
+	// SessionKey is the same per-conversation key scheduler.pick used to pin
+	// the account. Equal SessionKey values across rows mean the same
+	// stickiness-bound conversation. The producer currently always writes a
+	// value (empty string when no session signal was present) so the dashboard
+	// can group / sort requests by conversation.
+	SessionKey       string `json:"session_key,omitempty"`
 	ReasoningEffort  string `json:"reasoning_effort"`
 	Failed           bool   `json:"failed"`
 	FailureStatus    int    `json:"failure_status"`
@@ -783,7 +788,7 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.APIKeyGeneration, right.APIKeyGeneration),
 		cmp.Compare(left.APIKeyHash, right.APIKeyHash),
 		cmp.Compare(left.AuthType, right.AuthType),
-		cmp.Compare(left.ServiceTier, right.ServiceTier),
+		cmp.Compare(left.SessionKey, right.SessionKey),
 		cmp.Compare(left.ReasoningEffort, right.ReasoningEffort),
 		cmp.Compare(boolInt(left.Failed), boolInt(right.Failed)),
 		cmp.Compare(left.FailureStatus, right.FailureStatus),

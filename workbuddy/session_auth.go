@@ -99,28 +99,27 @@ func sessionHeaderValue(headers map[string][]string, name string) string {
 	return ""
 }
 
-// extractSessionKey derives a stable conversation key from a scheduler pick
-// request, using only information the host exposes to scheduler plugins.
+// extractSessionKeyFromSources derives a stable conversation key from raw
+// headers + metadata. Both scheduler.SchedulerOptions and
+// executor.ExecutorRequest expose these as flat (headers, metadata) fields,
+// so the same priority chain works on both sides of the pick → execute
+// handshake. Returns "" when no session signal is present; callers then fall
+// back to the panel-selected account.
 //
-// Priority order (strongest signal first):
+// Priority (strongest signal first):
 //  1. explicit execution session metadata (e.g. Codex websocket call id)
 //  2. explicit client session headers (Claude Code / Codex / Responses / OpenCode)
 //  3. host-derived session identity (stable hash of the conversation root)
 //
-// The host's session.Enrich runs before scheduling, so Options.Metadata is
-// already populated for requests without explicit session signals, and
-// explicit signals are NOT re-derived (metadata stays empty in that case) —
-// hence headers are checked before the derived identity.
-//
-// Returns "" when no session signal is present; callers then fall back to the
-// panel-selected account.
-func extractSessionKey(req pluginapi.SchedulerPickRequest) string {
-	if v, ok := req.Options.Metadata[executionSessionIDMetadataKey].(string); ok {
+// Headers are checked before the derived identity: host session.Enrich runs
+// before scheduling, so explicit signals are NOT re-derived (their metadata
+// stays empty), hence headers win over the derived fallback.
+func extractSessionKeyFromSources(headers map[string][]string, metadata map[string]any) string {
+	if v, ok := metadata[executionSessionIDMetadataKey].(string); ok {
 		if id := normalizeSessionID(v); id != "" {
 			return "execution:" + id
 		}
 	}
-	headers := req.Options.Headers
 	for _, header := range []string{
 		"X-Claude-Code-Session-Id", "Session-Id", "Session_id",
 		"X-Session-ID", "X-Session-Affinity", "X-Client-Request-Id",
@@ -129,12 +128,20 @@ func extractSessionKey(req pluginapi.SchedulerPickRequest) string {
 			return headerSessionPrefix(header) + sid
 		}
 	}
-	if v, ok := req.Options.Metadata[derivedSessionIDMetadataKey].(string); ok {
+	if v, ok := metadata[derivedSessionIDMetadataKey].(string); ok {
 		if id := normalizeSessionID(v); id != "" {
 			return "derived:" + id
 		}
 	}
 	return ""
+}
+
+// extractSessionKey derives a stable conversation key from a scheduler pick
+// request, using only information the host exposes to scheduler plugins.
+// Thin adapter over extractSessionKeyFromSources — see that function for the
+// priority chain and rationale.
+func extractSessionKey(req pluginapi.SchedulerPickRequest) string {
+	return extractSessionKeyFromSources(req.Options.Headers, req.Options.Metadata)
 }
 
 // headerSessionPrefix namespaces explicit session headers so different client

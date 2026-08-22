@@ -434,12 +434,19 @@ func estimateRequestCostWithResolver(request RequestDetail, resolver modelPriceR
 
 	rates := price.tokenRates()
 	contextTiers := price.ContextTiers
+	// SessionKey replaces the historical service-tier lookup key; the value
+	// populated here is the per-conversation id, which never matches a price
+	// schedule's catalog tier (those are configured independently by the
+	// operator), so the base schedule is always selected. Behavior is identical
+	// to the previous "" service_tier path. If a future producer wants the
+	// dashboard to drive tier-aware pricing again, plumb a dedicated dimension
+	// for it — do not overload SessionKey.
 	priceServiceTier := ""
-	serviceTier := strings.ToLower(strings.TrimSpace(request.ServiceTier))
-	if schedule, exists := price.ServiceTiers[serviceTier]; exists {
+	sessionKey := strings.ToLower(strings.TrimSpace(request.SessionKey))
+	if schedule, exists := price.ServiceTiers[sessionKey]; exists {
 		rates = schedule.tokenRates()
 		contextTiers = schedule.ContextTiers
-		priceServiceTier = serviceTier
+		priceServiceTier = sessionKey
 	}
 	var selectedThreshold uint64
 	for _, tier := range contextTiers {

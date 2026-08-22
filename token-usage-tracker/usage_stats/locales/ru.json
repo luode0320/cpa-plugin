@@ -153,7 +153,7 @@
   "table.time": "Время",
   "table.model": "Модель",
   "table.source": "Источник",
-  "table.tier": "Tier",
+  "table.session": "Сессия",
   "table.result": "Результат",
   "table.ttft": "Задержка первого токена",
   "table.generation": "Время генерации",

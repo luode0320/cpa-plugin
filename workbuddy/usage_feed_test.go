@@ -74,8 +74,8 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 		ReasoningTokens: 50,
 		TotalTokens:     350,
 	}
-	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started, detail, false, 200, "high", 850_000_000, "account-bob")
-	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started.Add(time.Second), detail, true, 502, "", 0, "account-alice")
+	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started, detail, false, 200, "high", 850_000_000, "account-bob", "execution:bob-session")
+	recordUsageFeed("alias-m", "deepseek-v4", "u-1", started.Add(time.Second), detail, true, 502, "", 0, "account-alice", "")
 
 	raw, err := os.ReadFile(feedPath)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 		Provider         string `json:"provider"`
 		Model            string `json:"model"`
 		Failed           bool   `json:"failed"`
-		ServiceTier      string `json:"service_tier"`
+		SessionKey       string `json:"session_key"`
 		ReasoningEffort  string `json:"reasoning_effort"`
 		TTFTNS           int64  `json:"ttft_ns"`
 		Tokens           struct {
@@ -120,10 +120,12 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if rec.ReasoningEffort != "high" {
 		t.Fatalf("reasoning_effort = %q, want high", rec.ReasoningEffort)
 	}
-	// service_tier stays empty: workbuddy does not plumb any upstream tier
-	// today and the dashboard Tier column intentionally shows "—".
-	if rec.ServiceTier != "" {
-		t.Fatalf("service_tier = %q, want empty", rec.ServiceTier)
+	// session_key mirrors the per-conversation id passed in: the dashboard's
+	// 会话 column surfaces it so users can see at a glance whether rows came
+	// from the same stickiness-bound conversation. Empty when no session
+	// signal was present (line 1 below).
+	if rec.SessionKey != "execution:bob-session" {
+		t.Fatalf("session_key = %q, want execution:bob-session", rec.SessionKey)
 	}
 	if rec.TTFTNS != 850_000_000 {
 		t.Fatalf("ttft_ns = %d, want 850000000", rec.TTFTNS)
@@ -141,8 +143,8 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if rec.Source != "account-alice" {
 		t.Fatalf("line 1 source = %q, want account-alice", rec.Source)
 	}
-	if rec.ServiceTier != "" {
-		t.Fatalf("line 1 service_tier = %q, want empty", rec.ServiceTier)
+	if rec.SessionKey != "" {
+		t.Fatalf("line 1 session_key = %q, want empty", rec.SessionKey)
 	}
 	if rec.TTFTNS != 0 {
 		t.Fatalf("line 1 ttft_ns = %d, want 0", rec.TTFTNS)

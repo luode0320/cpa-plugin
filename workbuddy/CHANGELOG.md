@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.13.1
+
+### Feature — 请求明细展示会话 ID（session_key 替换 Tier 占位列）
+
+token-usage-tracker 请求明细页的 `Tier` 列此前是空数据占位（workbuddy
+从未写入上游 service tier）。现改为展示**会话 ID**（截取前 8 位），用于
+回答"这条请求来自哪个会话、和上一条是不是同一个会话"——正常会话粘性
+路由下，同一会话的所有请求应命中同一前缀，跨会话一眼可辨。
+
+- `session_auth.go`：抽出 `extractSessionKeyFromSources(headers, metadata)`
+  纯函数，`extractSessionKey(req)` 改为薄包装（复用同一份优先级逻辑：
+  execution session metadata > 客户端 session 头 > derived session id）。
+- `usage.go` / `usage_feed.go`：`publishUsage` / `recordUsageFeed` 末位
+  追加 `sessionKey` 形参，NDJSON 记录新增 `session_key` 字段。
+- `main.go` / `stream.go`：`handleExecExecute` / `handleExecStream` 入口
+  各抓取一次会话键并透传全部调用点。
+- tracker 侧：`Dimensions.ServiceTier` → `SessionKey`（json `session_key`），
+  请求明细列 `Tier` → `会话`（前 8 位），定价查询不再误用该字段。
+- 兼容：旧 NDJSON 行无 `session_key` → 空串 → 列表显示 `—`，零迁移。
+
+### UI — 账号卡片对齐与筛选增强（panel.html）
+
+- 卡片宽度与"用量汇总 · 全部账号"对齐：`.grid` 由 `repeat(3,1fr)`
+  改为 `repeat(3, minmax(0, 1fr))`，避免卡片内容（长 uid/进度元信息）
+  撑破列宽导致卡片超出容器。
+- 移除卡片上"选用"按钮与"使用中" badge：路由已按会话粘性自动切换，
+  手动选用不再需要（后端 `/select` API 与 `selectAuth` 保留）。
+- 筛选栏新增"已禁用"、"保号"两个 tab：卡片增加 `data-disabled` /
+  `data-preserve` 属性，`applyCardVisibility` / `accountsForFilter` /
+  `updateFilterCounts` 同步支持新筛选与计数。
+
+### 涉及文件
+
+- `workbuddy/session_auth.go` / `usage.go` / `usage_feed.go` / `main.go` /
+  `stream.go` / `usage_feed_test.go`
+- `workbuddy/panel.html`
+- `token-usage-tracker/usage_stats/`（feed_import.go / usage.go /
+  aggregate.go / api.go / cost.go / dashboard.go / preferences.go /
+  usage_record_test.go）+ `locales/{zh-CN,zh-TW,en,ru}.json`
+
 ## 0.13.0
 
 ### Feature — 40x 同请求切号重试（retry_on_4xx 预算）

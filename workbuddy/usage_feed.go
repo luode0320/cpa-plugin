@@ -142,11 +142,17 @@ func cliProxyRootFromDir(dir string) (string, bool) {
 // fallback) and is written into the record's `source` field so the tracker
 // dashboard's 来源 (source) column shows which account served each request —
 // the previous "service_tier" misuse conflated account identity with pricing
-// tier and forced the dashboard to show UIDs in the Tier column. workbuddy
-// does not currently surface any upstream service tier, so service_tier is
-// written as an empty string and the tracker's Tier column intentionally
-// shows "—" until an upstream tier is plumbed through.
-func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int, reasoningEffort string, ttftNS uint64, accountLabel string) {
+// tier and forced the dashboard to show UIDs in the Tier column. sessionKey
+// is the same per-conversation key scheduler.pick used to pin this account
+// (extracted from the executor's req.Headers + req.Metadata) and is written
+// into the new `session_key` field so the dashboard's 会话 column shows which
+// conversation each request belongs to — equal session_key values across rows
+// mean the same stickiness-bound session. The field is always written (empty
+// string when no session signal was present) so the feed schema stays
+// self-documenting across NDJSON rotatations. workbuddy does not currently
+// surface any upstream service tier, so the legacy `service_tier` field is
+// dropped and replaced by `session_key`.
+func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int, reasoningEffort string, ttftNS uint64, accountLabel, sessionKey string) {
 	usageFeedMu.RLock()
 	enabled := usageFeedEnabled
 	path := usageFeedPath
@@ -181,7 +187,7 @@ func recordUsageFeed(alias, model, authUID string, started time.Time, detail usa
 		"executor_type":     "workbuddy",
 		"failed":            failed,
 		"status_code":       statusCode,
-		"service_tier":      "",
+		"session_key":       sessionKey,
 		"reasoning_effort":  strings.TrimSpace(reasoningEffort),
 		"ttft_ns":           ttftNS,
 		"tokens": map[string]any{

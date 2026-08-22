@@ -72,9 +72,13 @@ func handleUsage(raw []byte) ([]byte, error) {
 // is the workbuddy-internal account identifier (sa.Account.Nickname
 // preferred, authUID fallback) that surfaces in the tracker dashboard's
 // 来源 (source) column so users can filter which account served each
-// request. workbuddy does not currently inspect any upstream service tier
-// field, so the tracker's Tier column stays empty by design.
-func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody, reasoningEffort string, ttftNS uint64, accountLabel string) {
+// request. sessionKey is the same per-conversation key scheduler.pick used
+// to pin the account (extracted from req.Headers + req.Metadata at the
+// executor entry), written to the shared feed so the tracker dashboard can
+// show "was this request from the same session as the previous one?". Empty
+// when no session signal was present (rare; pick-side sticks to the
+// panel-selected account in that case).
+func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody, reasoningEffort string, ttftNS uint64, accountLabel, sessionKey string) {
 	model := strings.TrimSpace(upstreamModel)
 	if model == "" {
 		model = strings.TrimSpace(requestedModel)
@@ -95,7 +99,7 @@ func publishUsage(requestedModel, upstreamModel, authID string, started time.Tim
 		// plugin executors, and bbolt's exclusive flock forbids two long-lived
 		// processes sharing one DB file). Runs inside the goroutine so a slow
 		// filesystem never stalls the executor.
-		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, reasoningEffort, ttftNS, accountLabel)
+		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, reasoningEffort, ttftNS, accountLabel, sessionKey)
 		forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
 	}()
 }

@@ -517,7 +517,7 @@ func sortGroupStats(items []GroupStats, sortKey, direction string) error {
 		return withStatus(http.StatusBadRequest, "direction must be asc or desc")
 	}
 	numeric := map[string]bool{"requests": true, "failed_requests": true, "input_tokens": true, "output_tokens": true, "reasoning_tokens": true, "cache_read_tokens": true, "cache_creation_tokens": true, "total_tokens": true, "average_latency_ns": true, "average_ttft_ns": true}
-	text := map[string]bool{"model": true, "provider": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "service_tier": true, "reasoning_effort": true}
+	text := map[string]bool{"model": true, "provider": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "session_key": true, "reasoning_effort": true}
 	if !numeric[sortKey] && !text[sortKey] {
 		return withStatus(http.StatusBadRequest, "unsupported group sort %q", sortKey)
 	}
@@ -537,8 +537,8 @@ func sortGroupStats(items []GroupStats, sortKey, direction string) error {
 			return item.ExecutorType
 		case "auth_type":
 			return item.AuthType
-		case "service_tier":
-			return item.ServiceTier
+		case "session_key":
+			return item.SessionKey
 		case "reasoning_effort":
 			return item.ReasoningEffort
 		default:
