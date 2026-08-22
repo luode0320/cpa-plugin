@@ -68,10 +68,13 @@ func handleUsage(raw []byte) ([]byte, error) {
 //
 // reasoningEffort is the reasoning_effort value actually sent upstream (post
 // forceMaxThinking rewrite, "" when the client sent none). ttftNS is the
-// time-to-first-token in nanoseconds (0 when not observable). serviceTier
-// carries the account label (nickname preferred, UID fallback) surfaced in
-// the tracker dashboard's Tier column.
-func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody, reasoningEffort string, ttftNS uint64, serviceTier string) {
+// time-to-first-token in nanoseconds (0 when not observable). accountLabel
+// is the workbuddy-internal account identifier (sa.Account.Nickname
+// preferred, authUID fallback) that surfaces in the tracker dashboard's
+// 来源 (source) column so users can filter which account served each
+// request. workbuddy does not currently inspect any upstream service tier
+// field, so the tracker's Tier column stays empty by design.
+func publishUsage(requestedModel, upstreamModel, authID string, started time.Time, detail usage.Detail, failed bool, statusCode int, errBody, reasoningEffort string, ttftNS uint64, accountLabel string) {
 	model := strings.TrimSpace(upstreamModel)
 	if model == "" {
 		model = strings.TrimSpace(requestedModel)
@@ -92,7 +95,7 @@ func publishUsage(requestedModel, upstreamModel, authID string, started time.Tim
 		// plugin executors, and bbolt's exclusive flock forbids two long-lived
 		// processes sharing one DB file). Runs inside the goroutine so a slow
 		// filesystem never stalls the executor.
-		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, reasoningEffort, ttftNS, serviceTier)
+		recordUsageFeed(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, reasoningEffort, ttftNS, accountLabel)
 		forwardUsageToCPAMP(alias, model, authID, started, normalizeUsageDetail(detail), failed, statusCode, errBody)
 	}()
 }

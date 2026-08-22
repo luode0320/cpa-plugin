@@ -327,7 +327,7 @@ type registrationCapability struct {
 }
 
 // version is injected at build time via -ldflags "-X main.version=...".
-var version = "0.9.3"
+var version = "0.9.4"
 
 func wbRegistration() registration {
 	return registration{
@@ -678,11 +678,12 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
-	// Account label for the tracker dashboard's Tier column: nickname reads
-	// best, fall back to UID when the account has no nickname.
-	serviceTier := strings.TrimSpace(sa.Account.Nickname)
-	if serviceTier == "" {
-		serviceTier = authUID
+	// Workbuddy-internal account identifier forwarded to the tracker dashboard's
+	// "来源" (source) column so users can see which account served the request.
+	// Nickname reads best; fall back to UID when the account has no nickname.
+	accountLabel := strings.TrimSpace(sa.Account.Nickname)
+	if accountLabel == "" {
+		accountLabel = authUID
 	}
 	// CodeBuddy rejects non-stream requests (code 11101), so always stream
 	// upstream and fold the chunks into a single chat.completion object.
@@ -699,21 +700,21 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// outbound call. Read entire body via the bridge, then fold SSE → completion.
 	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
 	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, serviceTier)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
 		return nil, fmt.Errorf("http_error: %w", err)
 	}
 	defer stream.Close()
 	reader := newHostStreamReader(stream)
 	if statusCode >= 400 {
 		payload, _ := io.ReadAll(reader)
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload), reasoningEffort, 0, serviceTier)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload), reasoningEffort, 0, accountLabel)
 		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
 		return nil, fmt.Errorf("upstream %d: %s", statusCode, truncateRedacted(string(payload), 200))
 	}
 	var firstByteAt time.Time
 	completion, err := aggregateCompletion(reader, req.Model, &firstByteAt)
 	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, serviceTier)
+		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error(), reasoningEffort, 0, accountLabel)
 		return nil, err
 	}
 	ttftNS := uint64(0)
@@ -722,7 +723,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 			ttftNS = uint64(d)
 		}
 	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, ttftNS, serviceTier)
+	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "", reasoningEffort, ttftNS, accountLabel)
 	invalidateAccountCredits(req.AuthID, authUID)
 	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
@@ -750,11 +751,11 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	if sa.Account.UID != "" {
 		authUID = sa.Account.UID
 	}
-	// Account label for the tracker dashboard's Tier column (same rule as
-	// handleExecExecute): nickname preferred, UID fallback.
-	serviceTier := strings.TrimSpace(sa.Account.Nickname)
-	if serviceTier == "" {
-		serviceTier = authUID
+	// Workbuddy-internal account identifier for the tracker dashboard's 来源
+	// column (same rule as handleExecExecute): nickname preferred, UID fallback.
+	accountLabel := strings.TrimSpace(sa.Account.Nickname)
+	if accountLabel == "" {
+		accountLabel = authUID
 	}
 	body := req.Payload
 	if len(body) == 0 {
@@ -772,10 +773,10 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		collector := &sseUsageCollector{}
 		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector)
 		if errCollect != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error(), reasoningEffort, collector.ttftNS(started), serviceTier)
+			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error(), reasoningEffort, collector.ttftNS(started), accountLabel)
 			return nil, errCollect
 		}
-		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), serviceTier)
+		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "", reasoningEffort, collector.ttftNS(started), accountLabel)
 		invalidateAccountCredits(req.AuthID, authUID)
 		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
 	}
@@ -794,7 +795,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		return okEnvelope(streamResponse{Headers: headers})
 	}
 	backendHeaders(httpReq, sa)
-	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, serviceTier)
+	go pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, reasoningEffort, accountLabel)
 	return okEnvelope(streamResponse{Headers: headers})
 }
 

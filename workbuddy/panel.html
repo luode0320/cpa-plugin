@@ -122,6 +122,24 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 .modal-bd textarea{width:100%;min-height:160px;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--fg);font:12px/1.45 ui-monospace,monospace;resize:vertical;outline:none}
 .modal-bd textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-ring)}
 .modal-bd textarea::placeholder{color:var(--placeholder)}
+.file-row{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+.file-row .sec{display:inline-flex;align-items:center;gap:6px;cursor:pointer;margin:0}
+.file-list{margin-top:8px;max-height:150px;overflow:auto;border:1px dashed var(--border);border-radius:8px;padding:6px 10px;display:none}
+.file-list.show{display:block}
+.file-item{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:12px;border-bottom:1px dashed var(--border)}
+.file-item:last-child{border-bottom:0}
+.file-item .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-item .fs{color:var(--mut);flex:none;font-size:11px}
+.file-info{color:var(--mut);font-size:12px;margin-top:6px;line-height:1.45}
+.file-info.bad{color:var(--err)}
+.import-result{margin-top:12px;border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:12px;max-height:160px;overflow:auto;display:none}
+.import-result.show{display:block}
+.import-result .r-hd{font-weight:600;margin-bottom:6px}
+.import-result .r-hd.ok{color:var(--ok)}.import-result .r-hd.err{color:var(--err)}
+.import-result .r-item{display:flex;justify-content:space-between;gap:10px;padding:3px 0;border-top:1px dashed var(--border)}
+.import-result .r-item:first-of-type{border-top:0}
+.import-result .r-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.import-result .r-err{color:var(--err);flex:none;max-width:55%;text-align:right;word-break:break-all}
 .modal-ft{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--surface);border-radius:0 0 var(--radius-lg) var(--radius-lg)}
 .modal-ft button.sec{background:var(--btn-sec);color:var(--fg)}
 .modal-ft button.sec:hover{background:var(--btn-sec-hover)}
@@ -207,7 +225,15 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
     <div class="modal-bd">
       <p class="hint">支持 nested <code>{"auth":{...},"account":{...}}</code> 或 flat <code>{"accessToken":...}</code>。落盘为 <code>workbuddy-&lt;uid&gt;.json</code>。</p>
-      <textarea id="importRaw" rows="8" placeholder='粘贴 WorkBuddy / CodeBuddy 凭证 JSON'></textarea>
+      <textarea id="importRaw" rows="6" placeholder='粘贴 WorkBuddy / CodeBuddy 凭证 JSON'></textarea>
+      <div class="file-row">
+        <label class="sec" for="importFiles" title="可一次选择多个 .json 文件">📁 选择 JSON 凭证文件</label>
+        <input type="file" id="importFiles" multiple accept=".json,application/json" hidden>
+        <button type="button" class="sec" id="clearImportFiles" onclick="clearImportFiles()" style="display:none">清除</button>
+      </div>
+      <div class="file-list" id="importFileList"></div>
+      <div class="file-info" id="importFileInfo"></div>
+      <div class="import-result" id="importResult"></div>
     </div>
     <div class="modal-ft">
       <button type="button" class="sec" onclick="closeImportModal()">取消</button>
@@ -878,6 +904,7 @@ function openImportModal(){
   m.classList.add("show");
   const ta=document.getElementById("importRaw");
   if(ta) setTimeout(()=>ta.focus(),0);
+  hideImportResult();
 }
 function closeImportModal(){
   document.getElementById("importModal").classList.remove("show");
@@ -887,20 +914,116 @@ function onImportMaskClick(e){
 }
 async function importAuth(btn){
   const raw=(document.getElementById("importRaw").value||"").trim();
-  if(!raw){toast("请粘贴凭证 JSON","warn");return}
+  const items=[];
+  if(raw) items.push({name:"(粘贴)", text:raw});
+  for(const f of importQueue) items.push(f);
+  if(!items.length){toast("请粘贴凭证 JSON 或选择凭证文件","warn");return}
   busy(btn,true);
-  try{
-    let payload={raw};
-    try{payload={json:JSON.parse(raw)}}catch(_){}
-    const d=await api("/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
-    if(d.success){
-      toast("导入成功","ok",(d.nickname||d.uid||"")+ " → "+(d.file||d.name||""));
-      document.getElementById("importRaw").value="";
-      closeImportModal();
-      load(true);
-    }else toast("导入失败","err",d.error||"unknown");
-  }catch(e){toast("导入请求失败","err",e.message)}
+  hideImportResult();
+  const ok=[], fail=[];
+  for(let i=0;i<items.length;i++){
+    if(items.length>1) btn.innerHTML='<span class="spin"></span>导入中 '+(i+1)+'/'+items.length;
+    const it=items[i];
+    try{
+      const d=await importOne(it.text);
+      if(d&&d.success){
+        ok.push({name:it.name,nick:d.nickname,uid:d.uid,file:d.file||d.name});
+      }else{
+        fail.push({name:it.name,error:(d&&d.error)||"unknown error"});
+      }
+    }catch(e){fail.push({name:it.name,error:e.message})}
+  }
+  if(!fail.length){
+    const who=ok.map(o=>o.nick||o.uid||o.name).join("、");
+    toast("导入成功："+ok.length+" 个账号","ok",who.slice(0,220));
+    clearImportFiles();
+    document.getElementById("importRaw").value="";
+    closeImportModal();
+    load(true);
+  }else{
+    const detail=fail.map(f=>f.name+": "+f.error).join("；");
+    toast("导入完成："+ok.length+" 成功 / "+fail.length+" 失败","err",detail.slice(0,300));
+    showImportResult(ok,fail);
+  }
   busy(btn,false);
+}
+/* ---------- multi-file credential import (batch) ----------
+   Each selected file is imported through the SAME single-credential /import
+   endpoint (one call per file, serial). The plugin-layer per-IP token bucket
+   (capacity 5, refill 1/6s) throttles bursts, so a rate-limit response is
+   retried after 7s instead of surfacing as a failure.
+*/
+let importQueue=[]; // {name,text}
+const MAX_IMPORT_FILE=2*1024*1024;
+function clearImportFiles(){
+  importQueue=[];
+  document.getElementById("importFiles").value="";
+  document.getElementById("importFileList").innerHTML="";
+  document.getElementById("importFileList").classList.remove("show");
+  document.getElementById("importFileInfo").textContent="";
+  document.getElementById("importFileInfo").className="file-info";
+  document.getElementById("clearImportFiles").style.display="none";
+}
+document.getElementById("importFiles").addEventListener("change",async e=>{
+  const input=e.target;
+  const fs=[...(input.files||[])];
+  input.value="";
+  importQueue=[];
+  const list=document.getElementById("importFileList");
+  const info=document.getElementById("importFileInfo");
+  const clearBtn=document.getElementById("clearImportFiles");
+  list.innerHTML="";
+  let skipped=0;
+  for(const f of fs){
+    if(!(/\.json$/i.test(f.name)||f.type==="application/json")){skipped++;continue}
+    if(f.size>MAX_IMPORT_FILE){skipped++;continue}
+    try{
+      const text=await f.text();
+      if(!text.trim()){skipped++;continue}
+      importQueue.push({name:f.name,text});
+      const d=document.createElement("div");
+      d.className="file-item";
+      d.innerHTML='<span class="fn">'+esc(f.name)+'</span><span class="fs">'+(f.size/1024).toFixed(1)+' KB</span>';
+      list.appendChild(d);
+    }catch(_){skipped++}
+  }
+  list.classList.toggle("show",importQueue.length>0);
+  clearBtn.style.display=importQueue.length?"inline-block":"none";
+  if(importQueue.length){
+    info.textContent="已选 "+importQueue.length+" 个凭证文件"+(skipped?"，跳过 "+skipped+" 个（非 .json / 超 2MB / 空内容）":"");
+    info.className="file-info"+(skipped?" bad":"");
+  }else{
+    info.textContent=fs.length?("没有可导入的文件"+(skipped?"（跳过 "+skipped+" 个）":"")):"";
+    info.className="file-info bad";
+  }
+});
+function hideImportResult(){
+  const r=document.getElementById("importResult");
+  r.classList.remove("show");
+  r.innerHTML="";
+}
+function showImportResult(ok,fail){
+  const r=document.getElementById("importResult");
+  const hd=fail.length
+    ? '<div class="r-hd err">导入完成：'+ok.length+' 成功 / '+fail.length+' 失败（失败项保留在此，修正后可重新导入）</div>'
+    : '<div class="r-hd ok">导入成功：'+ok.length+' 个账号</div>';
+  const items=fail.map(f=>
+    '<div class="r-item"><span class="r-name">'+esc(f.name)+'</span><span class="r-err">'+esc(f.error)+'</span></div>'
+  ).join("");
+  r.innerHTML=hd+'<div class="r-list">'+items+'</div>';
+  r.classList.add("show");
+}
+async function importOne(text){
+  let payload={raw:text};
+  try{payload={json:JSON.parse(text)}}catch(_){}
+  for(let attempt=0;attempt<4;attempt++){
+    const d=await api("/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(d&&d.error&&/rate limit/i.test(d.error)&&attempt<3){
+      await new Promise(res=>setTimeout(res,7000));
+      continue;
+    }
+    return d;
+  }
 }
 document.getElementById("keyInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveKey()});
 document.addEventListener("keydown",e=>{

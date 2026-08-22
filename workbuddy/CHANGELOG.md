@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.4
+
+### Fix — 共享 feed 中 `source` / `service_tier` 字段语义对调
+
+`token-usage-tracker` dashboard 的"请求明细"在 0.8.9 拆出后出现了列值错
+位：每条记录的「来源」列恒为字面量 `workbuddy`，而「Tier」列被填的是账
+号 UID（`17625821743` 等）。根因是 workbuddy 在 feed 里把账号身份
+（`sa.Account.Nickname`，兜底 `authUID`）误塞进了 `service_tier` 字段，
+而 `source` 被硬编码成 `"workbuddy"`，导致 dashboard 把账号身份渲染到了
+价格 tier 列里。
+
+- **调整**（`workbuddy/usage_feed.go:165-189`）：
+  - `source` 现在写入 `accountLabel`（`sa.Account.Nickname`，没设昵称
+    时回退到 `authUID`）—— 此即用户在 dashboard「来源」列想要看到的
+    "workbuddy 内的账号名"。
+  - `service_tier` 写空串 —— workbuddy 当前调用链没有从上游 chat 接口
+    解出真正的 tier，保留原"语义错位"反而误导用户。cost 侧在空
+    `service_tier` 时直接走默认价表（`token-usage-tracker/usage_stats/cost.go:437-443`），
+    不会因 tier 空值而报错。
+- **形参重命名**（`publishUsage` / `pumpUpstreamStream` / `recordUsageFeed`
+  最后位置参）：`serviceTier → accountLabel`，让"形参名"和它传递的真实含
+  义（workbuddy 内的账号标签）对齐。调用方 `main.go:683, 755`、`stream.go:71`
+  同步更新变量名 + 注释。
+- **消费侧零改动**：`token-usage-tracker` 列绑定（`source → 来源`、
+  `service_tier → Tier`）本就正确，UI 不需要任何修改。
+- **存量数据**：本地 bbolt 里旧的 `service_tier` 字段不会被改写，dashboard
+  上历史行仍按旧值（UID）显示；如需完全切到新列含义，可走
+  `token-usage-tracker` 的"重置统计"。新增请求立即以新语义记录。
+- **测试**：`usage_feed_test.go` 同步更新断言——`source` 期望账号标签、
+  `service_tier` 期望空串。
+
+### Feature — 多 JSON 凭证文件一键批量导入
+
+「导入凭证」弹窗在保留原有粘贴 JSON 的基础上，新增多文件选择入口：
+
+- **文件选择**：`📁 选择 JSON 凭证文件`（`<input type=file multiple>`），一次可
+  选多个 `.json`，选完即展示待导入清单（文件名 + 大小），可一键清除。
+- **批量语义**：每个文件独立走现有单凭证 `/import` 端点（逐条串行），单文件
+  失败跳过继续，不因一个坏文件中断整批。
+- **限流兼容**：插件层 per-IP token bucket（capacity 5 / refill 1/6s）对批量
+  突发会返回 429，前端识别 `rate limit` 后自动退避 7s 重试（最多 3 次），不
+  再把限流误报为导入失败。
+- **结果报告**：全部成功自动关弹窗刷新面板；有失败时弹窗内展示
+  `N 成功 / M 失败` 明细清单（文件名 + 原因），供修正后重试。
+- **边界**：非 `.json` / 超 2MB / 空内容文件在选择阶段即跳过并提示；粘贴内容
+  与文件可混用，按「先粘贴后文件」顺序导入。
+- 纯前端改动（`panel.html`），后端 `/import` 契约不变。
+
 ## 0.8.9
 
 ### Change — 本地用量统计拆分为独立插件 token-usage-tracker(v0.1.0)

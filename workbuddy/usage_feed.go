@@ -137,10 +137,16 @@ func cliProxyRootFromDir(dir string) (string, bool) {
 // tracker plugin and CPAMP see identical data. reasoningEffort is the
 // reasoning_effort actually sent upstream (post forceMaxThinking rewrite);
 // ttftNS is the time-to-first-token in nanoseconds (0 when not observable,
-// e.g. non-SSE paths or transport failures). serviceTier carries the account
-// label (nickname preferred, UID fallback) so the tracker dashboard's Tier
-// column shows which workbuddy account served each request.
-func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int, reasoningEffort string, ttftNS uint64, serviceTier string) {
+// e.g. non-SSE paths or transport failures). accountLabel is the
+// workbuddy-internal account identifier (sa.Account.Nickname preferred, authUID
+// fallback) and is written into the record's `source` field so the tracker
+// dashboard's 来源 (source) column shows which account served each request —
+// the previous "service_tier" misuse conflated account identity with pricing
+// tier and forced the dashboard to show UIDs in the Tier column. workbuddy
+// does not currently surface any upstream service tier, so service_tier is
+// written as an empty string and the tracker's Tier column intentionally
+// shows "—" until an upstream tier is plumbed through.
+func recordUsageFeed(alias, model, authUID string, started time.Time, detail usage.Detail, failed bool, statusCode int, reasoningEffort string, ttftNS uint64, accountLabel string) {
 	usageFeedMu.RLock()
 	enabled := usageFeedEnabled
 	path := usageFeedPath
@@ -165,7 +171,7 @@ func recordUsageFeed(alias, model, authUID string, started time.Time, detail usa
 	record := map[string]any{
 		"timestamp":         ts.UTC().Format(time.RFC3339Nano),
 		"latency_ms":        latencyMs,
-		"source":            "workbuddy",
+		"source":            strings.TrimSpace(accountLabel),
 		"auth_index":        strings.TrimSpace(authUID),
 		"provider":          providerName,
 		"model":             model,
@@ -175,7 +181,7 @@ func recordUsageFeed(alias, model, authUID string, started time.Time, detail usa
 		"executor_type":     "workbuddy",
 		"failed":            failed,
 		"status_code":       statusCode,
-		"service_tier":      strings.TrimSpace(serviceTier),
+		"service_tier":      "",
 		"reasoning_effort":  strings.TrimSpace(reasoningEffort),
 		"ttft_ns":           ttftNS,
 		"tokens": map[string]any{

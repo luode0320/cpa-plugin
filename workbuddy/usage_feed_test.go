@@ -102,7 +102,10 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &rec); err != nil {
 		t.Fatalf("decode line 0: %v", err)
 	}
-	if rec.Source != "workbuddy" || rec.Provider != providerName || rec.Model != "deepseek-v4" {
+	// Source must mirror the accountLabel that was passed in (workbuddy-internal
+	// account identifier surfaced in the dashboard 来源 column); the literal
+	// "workbuddy" stays in the provider field.
+	if rec.Source != "account-bob" || rec.Provider != providerName || rec.Model != "deepseek-v4" {
 		t.Fatalf("record = %+v", rec)
 	}
 	if rec.AuthIndex != "u-1" {
@@ -117,8 +120,10 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if rec.ReasoningEffort != "high" {
 		t.Fatalf("reasoning_effort = %q, want high", rec.ReasoningEffort)
 	}
-	if rec.ServiceTier != "account-bob" {
-		t.Fatalf("service_tier = %q, want account-bob", rec.ServiceTier)
+	// service_tier stays empty: workbuddy does not plumb any upstream tier
+	// today and the dashboard Tier column intentionally shows "—".
+	if rec.ServiceTier != "" {
+		t.Fatalf("service_tier = %q, want empty", rec.ServiceTier)
 	}
 	if rec.TTFTNS != 850_000_000 {
 		t.Fatalf("ttft_ns = %d, want 850000000", rec.TTFTNS)
@@ -133,8 +138,11 @@ func TestRecordUsageFeedAppendsNDJSON(t *testing.T) {
 	if rec.ReasoningEffort != "" {
 		t.Fatalf("line 1 reasoning_effort = %q, want empty", rec.ReasoningEffort)
 	}
-	if rec.ServiceTier != "account-alice" {
-		t.Fatalf("line 1 service_tier = %q, want account-alice", rec.ServiceTier)
+	if rec.Source != "account-alice" {
+		t.Fatalf("line 1 source = %q, want account-alice", rec.Source)
+	}
+	if rec.ServiceTier != "" {
+		t.Fatalf("line 1 service_tier = %q, want empty", rec.ServiceTier)
 	}
 	if rec.TTFTNS != 0 {
 		t.Fatalf("line 1 ttft_ns = %d, want 0", rec.TTFTNS)
