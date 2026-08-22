@@ -362,6 +362,22 @@ function bindCardActions(root){
     });
   });
 }
+// Routing-pool cycle mappings. Hoisted to module scope so both card() (used by
+// re-render) and togglePool() (the click handler) can reach them — declaring
+// them inside card() broke the click handler with a ReferenceError that was
+// silently swallowed by try/catch, making the buttons look "dead".
+//
+// Cycle: default → priority → fallback → default. The button shows the
+// CURRENT pool state; the badge (already correct) shows the same. Click
+// requests the NEXT state.
+const POOL_NAMES = {default:"默认", priority:"优先", fallback:"兜底"};
+const POOL_NEXT = {default:"priority", priority:"fallback", fallback:"default"};
+const POOL_BTN_LABEL = {default:"默认", priority:"优先", fallback:"兜底"};
+const POOL_BTN_TITLE = {
+  default: "当前为默认池。点击切换到优先池：有可用优先账号时路由只用优先账号",
+  priority: "当前为优先池。点击切换到兜底池：优先/默认账号耗尽后才用该账号",
+  fallback: "当前为兜底池。点击恢复默认池"
+};
 function card(a){
   const plan=(a.plan||"unknown").toLowerCase();
   const ci=a.checkin||{}, cr=a.credits;
@@ -390,19 +406,12 @@ function card(a){
     ? `<button class="done" disabled="disabled">使用中</button>`
     : (disabled?``:`<button class="sec" data-action="select" data-auth-index="${esc(a.auth_index)}">选用</button>`);
   // Routing pool cycle button: default → priority → fallback → default. The
-  // button shows the NEXT pool (what a click will do); the badge shows the
-  // current one. Live — no restart needed; the pool is persisted on the auth
-  // file. scheduler.pick cascades priority → default → fallback.
-  const poolNames={default:"默认",priority:"优先",fallback:"兜底"};
-  const nextPool={default:"priority",priority:"fallback",fallback:"default"};
-  const poolBtnLabel={default:"设优先",priority:"设兜底",fallback:"设默认"};
-  const poolBtnTitle={
-    default:"当前为默认池。点击设为优先池：有可用优先账号时路由只用优先账号",
-    priority:"当前为优先池。点击设为兜底池：优先/默认账号耗尽后才用该账号",
-    fallback:"当前为兜底池。点击恢复默认池"
-  };
+  // button shows the CURRENT pool state (see POOL_BTN_LABEL/POOL_BTN_TITLE
+  // declared at module scope); the badge shows the same. Live — no restart
+  // needed; the pool is persisted on the auth file. scheduler.pick cascades
+  // priority → default → fallback.
   const curPool=(a.pool==="fallback"||a.pool==="priority")?a.pool:"default";
-  const poolBtn=`<button class="sec${curPool==="priority"?" prio-on":""}" data-action="pool" data-auth-index="${esc(a.auth_index)}" title="${poolBtnTitle[curPool]}">${poolBtnLabel[curPool]}</button>`;
+  const poolBtn=`<button class="sec${curPool==="priority"?" prio-on":""}" data-action="pool" data-auth-index="${esc(a.auth_index)}" title="${POOL_BTN_TITLE[curPool]}">${POOL_BTN_LABEL[curPool]}</button>`;
   const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
   // Manual enable/disable toggle. Disabled accounts show "启用"; live accounts
   // show a danger-styled "禁用". Disabling the active account is allowed — the
@@ -855,9 +864,11 @@ async function toggleAuth(idx, btn){
 async function togglePool(idx, btn){
   // Cycle the pool forward: default → priority → fallback → default. The
   // backend receives the explicit target pool so double-clicks are idempotent.
+  // Cycle/label maps are hoisted at module scope (see POOL_NEXT/POOL_NAMES
+  // near the top of this script).
   const a=(lastAccounts||[]).find(x=>x.auth_index===idx);
   const cur=(a&&(a.pool==="fallback"||a.pool==="priority"))?a.pool:"default";
-  const target=nextPool[cur]||"priority";
+  const target=POOL_NEXT[cur]||"priority";
   busy(btn,true);
   try{
     const d=await api("/pool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({auth_index:idx,pool:target})});
@@ -868,7 +879,7 @@ async function togglePool(idx, btn){
     }
     const who=d.nickname||idx;
     const ps=d.pool_sizes||{};
-    toast(`已设为${poolNames[target]||target}池`,"ok",who+(ps.priority!=null?` · 优先 ${ps.priority} / 兜底 ${ps.fallback!=null?ps.fallback:0}`:""));
+    toast(`已设为${POOL_NAMES[target]||target}池`,"ok",who+(ps.priority!=null?` · 优先 ${ps.priority} / 兜底 ${ps.fallback!=null?ps.fallback:0}`:""));
     // Update local state and re-render instantly for immediate feedback.
     if(a){ a.pool=d.pool||target; }
     const g=document.getElementById("grid");

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.1
+
+### Fix — 三池按钮文案错 + 点击无反应
+
+`panel.html` 的三池循环按钮实现有两处缺陷：
+
+1. **文案错**：按钮显示 `设优先 / 设兜底 / 设默认`（动作描述），
+   用户期望显示当前状态名 `默认 / 优先 / 兜底`。
+2. **点击无反应**：`nextPool` / `poolNames` 映射被错误地声明在
+   `card()` 函数内（const 块作用域），但 `togglePool()` 事件处理
+   函数是模块级，访问不到 → `ReferenceError` → 被 try/catch 吞掉
+   → 按钮看起来"无反应"，仅短暂闪烁"池设置失败: nextPool is not
+   defined"toast。
+
+修复：将四个映射 (`POOL_NAMES` / `POOL_NEXT` / `POOL_BTN_LABEL` /
+`POOL_BTN_TITLE`) 提到模块作用域；按钮文案改为当前状态名；保持
+点击切换目标 (`POOL_NEXT`) 不变。
+
+### 后端零改动
+
 ## 0.10.0
 
 ### Feature — 三池路由（priority / default / fallback 级联）
