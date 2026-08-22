@@ -77,6 +77,87 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 	}
 }
 
+// handleExportAuth returns every WorkBuddy credential known to the host as a
+// single JSON document, so the panel's 导出凭证 button can offer a one-click
+// backup that round-trips through the existing /import endpoint (parseStored
+// accepts the on-disk nested `{"auth":{...},"account":{...}}` form directly).
+//
+// Response shape (HTTP body, application/json):
+//
+//	{
+//	  "version":     1,
+//	  "exported_at": "2026-08-22T11:30:00Z",
+//	  "plugin":      "workbuddy-provider",
+//	  "count":       13,
+//	  "accounts": [
+//	    {
+//	      "name":       "workbuddy-17021653110.json",
+//	      "auth_index": "...",
+//	      "uid":        "17021653110",
+//	      "nickname":   "...",
+//	      "region":     "cn",
+//	      "credential": { ... raw physical JSON (parsed) ... }
+//	    },
+//	    ...
+//	  ]
+//	}
+//
+// Per-account failures (load error / parse error) are recorded inline as a
+// `load_error` or `parse_error` field, with `credential` omitted — the export
+// is best-effort and never fails the whole batch for one bad file.
+func handleExportAuth(req pluginapi.ManagementRequest) map[string]any {
+	files, err := hostAuthList()
+	if err != nil {
+		return map[string]any{"error": "host.auth.list failed: " + err.Error(), "count": 0, "accounts": []any{}}
+	}
+	out := make([]map[string]any, 0, len(files))
+	for _, f := range files {
+		phys, gerr := hostAuthGetPhysical(f.AuthIndex)
+		if gerr != nil || phys == nil {
+			out = append(out, map[string]any{
+				"name":       f.Name,
+				"auth_index": f.AuthIndex,
+				"load_error": errString(gerr),
+			})
+			continue
+		}
+		// Re-decode the physical JSON into a generic map so the response carries
+		// parsed JSON (the import endpoint already accepts either nested object
+		// or raw bytes via body.json/body.raw). Keeping it parsed makes the
+		// output diff-friendly and unambiguous about what came back.
+		var cred any
+		_ = json.Unmarshal(phys.JSON, &cred)
+		sa, perr := parseStored(phys.JSON)
+		entry := map[string]any{
+			"name":       f.Name,
+			"auth_index": f.AuthIndex,
+			"credential": cred,
+		}
+		if sa != nil {
+			entry["uid"] = sa.Account.UID
+			entry["nickname"] = sa.Account.Nickname
+			entry["region"] = accountRegion(sa)
+		} else {
+			entry["parse_error"] = errString(perr)
+		}
+		out = append(out, entry)
+	}
+	return map[string]any{
+		"version":     1,
+		"exported_at": time.Now().UTC().Format(time.RFC3339),
+		"plugin":      providerName,
+		"count":       len(out),
+		"accounts":    out,
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func handleCheckinConfig(req pluginapi.ManagementRequest) map[string]any {
 	var body struct {
 		Enabled *bool `json:"enabled"`
@@ -302,6 +383,7 @@ cr, err := fetchUserResource(sa)
 			"disabled":   f.Disabled,
 			"selected":   getActiveAuthID() == f.ID,
 			"pool":       poolFor(f.ID),
+			"preserve":   isPreserve(f.ID),
 		}
 			if err != nil {
 				acct["error"] = err.Error()

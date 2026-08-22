@@ -149,6 +149,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/checkin/config", Description: "Toggle auto check-in (enabled: true/false)."},
 			{Method: http.MethodGet, Path: base + "/credits", Description: "Get real-time credits for one (auth_index query) or all accounts."},
 			{Method: http.MethodPost, Path: base + "/import", Description: "Import WorkBuddy credential JSON (nested or flat) into host auth store."},
+			{Method: http.MethodGet, Path: base + "/export", Description: "Export all WorkBuddy credentials as a single JSON document for backup/sharing (raw physical files, nested form re-importable via /import)."},
 			{Method: http.MethodPost, Path: base + "/trial", Description: "Claim expert trial pack for one Global account (auth_index). One-time 250 credits / 14 days."},
 			{Method: http.MethodPost, Path: base + "/select", Description: "Select the active account card used for chat routing (body: {auth_index})."},
 			{Method: http.MethodPost, Path: base + "/pool", Description: "Assign an account to a routing pool (body: {auth_index, pool: default|priority|fallback}). scheduler.pick cascades priority → default → fallback: while a higher pool has a usable account, lower pools get no traffic."},
@@ -206,6 +207,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleCreditsQuery(req)))
 	case req.Method == http.MethodPost && path == base+"/import":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleImportAuth(req)))
+	case req.Method == http.MethodGet && path == base+"/export":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleExportAuth(req)))
 	case req.Method == http.MethodPost && path == base+"/trial":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleClaimTrial(req)))
 	case req.Method == http.MethodPost && path == base+"/select":
@@ -337,6 +340,7 @@ func mutatingManagementPath(path string) bool {
 		base + "/checkin",
 		base + "/checkin/config",
 		base + "/import",
+		base + "/export",
 		base + "/trial",
 		base + "/select",
 		base + "/pool",

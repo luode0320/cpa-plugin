@@ -120,6 +120,15 @@ plugins:
       # 即点即生效，持久化在 auth 文件顶级 pool 字段（旧 priority: true
       # 自动迁移），无需重启。
 
+      # 保号池 — 积分看护。每隔 preserve_watchdog_interval（默认 10m，首轮
+      # 立即执行）拉取全部账号真实积分；剩余积分低于 preserve_threshold
+      # （默认 50）的账号划入保号态（auth 文件顶级 preserve: true）：
+      # 不参与路由、驱逐已绑定会话，积分回血后自动释放。
+      # preserve_watchdog_enabled: false 可保留已保号账号但不再新增。
+      preserve_threshold: 50
+      preserve_watchdog_interval: "10m"
+      preserve_watchdog_enabled: true
+
       # CPAMP usage 上报。URL+key 都设置才会上报。
       # 未配置时 fallback 到 USAGE_REPORT_URL / USAGE_REPORT_KEY /
       # CPAMP_ADMIN_KEY 环境变量或 docker secret 文件。
@@ -168,6 +177,32 @@ plugins:
    优先桶耗尽后再逐级迁回。
 4. 切换即点即生效：无需重启、无需改配置。删除账号时自动移出池。
    v0.9.x 旧 `priority: true` 标记读取时自动迁移为优先池。
+
+## 保号池（积分看护）
+
+保号池是**运行时健康闸门**，不是第 4 个路由桶：当账号剩余积分跌破阈值时
+暂时"屏蔽"它，让路由停止消耗其最后一点积分，等用户充值回血。与 `pool`
+不同，保号标记由 watchdog 自动翻转——用户手动选择的优先/默认/兜底归属
+永不被覆盖。
+
+工作机制：
+
+1. **定时看护** — 每隔 `preserve_watchdog_interval`（默认 `10m`，插件启动
+   首轮立即执行）经共享 singleflight 通道拉取全部 workbuddy 账号真实积分。
+2. **进入保号** — 当 `total_remain < preserve_threshold`（默认 `50`，严格
+   小于）时，auth 文件写入 `preserve: true`（宿主 watcher 自动接管、重启
+   不丢），并**立即驱逐**所有绑定到该账号的会话 binding——正在使用的对话
+   下一次请求自动改走健康账号。
+3. **不参与路由** — 保号账号在 `scheduler.pick` 中整体剔除（与 disabled
+   同级过滤，先于 failover cooldown）。仅当**全部** workbuddy 账号都保号
+   时保留全列表回落到当前 pin，避免全库保号把路由锁死。
+4. **自动恢复** — 积分回到 `>= threshold` 后 watchdog 自动清除标记
+   （删除 `preserve` 键），账号回到原池继续参与路由。刻意不提供手动开关：
+   保号是健康闸门，不是用户偏好。
+
+配置项：`preserve_threshold`（int）、`preserve_watchdog_interval`
+（时长字符串）、`preserve_watchdog_enabled`（bool），见上方配置示例。
+面板对保号账号显示**保号**徽标，汇总栏显示 `保号 N` 计数。
 
 ## 生命周期
 

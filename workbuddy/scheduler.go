@@ -96,6 +96,29 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 	if len(wbCandidates) == 0 {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
+
+	// Preserve filter: accounts the watchdog flagged (credits below
+	// preserve_threshold) are kept out of routing entirely so they keep a
+	// small credit buffer. Place this BEFORE the cooldown filter so the
+	// lastNonEmpty fallback can still see preserved accounts when every
+	// workbuddy account is preserved — we don't want a fleet-wide credit
+	// reset to lock routing. Like the cooldown filter below, when every
+	// account is preserved we keep the full list so the pickers fall back to
+	// the current pin.
+	preserveFiltered := make([]pluginapi.SchedulerAuthCandidate, 0, len(wbCandidates))
+	for _, c := range wbCandidates {
+		if !isAccountPreserved(c.ID) {
+			preserveFiltered = append(preserveFiltered, c)
+		}
+	}
+	if len(preserveFiltered) > 0 {
+		wbCandidates = preserveFiltered
+	}
+	// Cooldown filter: accounts in failover cooldown are skipped so new
+	// requests route to a healthy account instead — but only when at least
+	// one healthy candidate remains. If EVERY workbuddy account is cooling
+	// down, keep the full list so the pickers fall back to the current pin
+	// (mirrors the all-exhausted fallback) instead of deferring.
 	filtered := make([]pluginapi.SchedulerAuthCandidate, 0, len(wbCandidates))
 	for _, c := range wbCandidates {
 		if !isAccountCoolingDown(c.ID) {
@@ -213,4 +236,13 @@ func anyCandidateUsable(cands []pluginapi.SchedulerAuthCandidate) bool {
 		}
 	}
 	return false
+}
+
+// isAccountPreserved reports whether the account is currently flagged by the
+// preserve watchdog and must be kept out of routing. Symmetric with
+// isAccountCoolingDown for the cooldown filter; returns true when the
+// watchdog has set the top-level preserve flag on disk and mirrored it into
+// preserveSet.
+func isAccountPreserved(authID string) bool {
+	return isPreserve(authID)
 }

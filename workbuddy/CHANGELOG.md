@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.11.0
+
+### Feature — 凭证导出 + 账号搜索 + 按积分排序
+
+面板工具栏新增三项能力，配合既有的一键导入形成凭证备份/恢复闭环：
+
+1. **导出凭证**（`导入凭证` 右侧新按钮）：新增 `GET /plugins/workbuddy-provider/export`
+   端点，遍历宿主全部 workbuddy 账号，返回
+   `{version, exported_at, count, accounts:[{name, auth_index, uid, nickname, region, credential}]}`
+   —— 其中 `credential` 是每个账号的**原始物理文件 JSON**（nested 形式），
+   面板一键下载为 `workbuddy-credentials-YYYY-MM-DD.json`。单账号加载/解析
+   失败不影响整批（内联 `load_error` / `parse_error` 标记）。该端点纳入
+   `mutatingManagementPath`，配置了 management key 时同样要求 Bearer 认证
+   并受速率限制（返回敏感凭证，不应与 /accounts 同级透传）。
+2. **搜索**（`全部领取` 右侧搜索框）：按 **nickname 模糊匹配**（大小写不敏感
+   子串），同时匹配 label / 文件名 / UID（昵称为空时按 UID 找号更实用）。
+   输入即过滤，与区域过滤（全部/CN/Global/耗尽）叠加生效，无需重新加载。
+3. **排序**（搜索框右侧 `积分 ↕` 按钮）：按可用积分 `total_remain` 三态循环
+   切换：关闭 → 升序（剩余少→多）→ 降序（剩余多→少）→ 关闭。未知积分的
+   账号视为 -1（升序排最前、降序排最后）。排序开启时，卡片积分懒加载完成
+   会触发整格重排，保证顺序实时正确。
+4. **批量导入兼容**：导入弹窗（粘贴或选文件）现在自动识别
+   「导出凭证」文件（`accounts[].credential` 包装）、纯 JSON 数组、以及单个
+   nested/flat 凭证，统一展开为逐条凭证走既有 `/import` 管道——导出的文件
+   可直接拖回导入框完成恢复（含 7s 限流重试）。
+
+### 行为说明
+
+- 搜索/排序为纯前端状态（`currentSearch` / `currentSort`），不新增后端
+  查询参数；排序仅影响展示顺序，不改动账号卡原始顺序（关闭后还原）。
+- `filterRegion` 与 `applyCardVisibility` 合并：区域过滤 + 搜索统一走
+  卡片可见性切换，避免两套 display 逻辑互相覆盖。
+
+### Feature — 保号池（积分阈值看护，自动暂停低积分账号路由）
+
+系统此前只在请求发生时读取账号积分缓存（全事件驱动，无定时刷新）：
+账号积分在两次请求之间悄悄跌破阈值时，路由依旧会把它当作可用账号继续
+分发请求，直到下一次真实请求才触发耗尽处理——此时剩余积分往往已被
+耗尽。本次新增**保号池**机制，把"健康看护"从请求路径中剥离出来：
+
+1. **定时刷新**：新增后台 watchdog（默认每 10 分钟，可配置），遍历全部
+   workbuddy 账号，经既有 singleflight 通道拉取真实积分
+   （`/v2/billing/meter/get-user-resource`），首轮立即执行（插件启动即
+   同步一次，无需等待一个完整周期）。
+2. **阈值保号**：积分剩余 < `preserve_threshold`（默认 50）的账号被标记
+   为**保号状态**（写物理 auth 文件顶级 `preserve: true`，宿主 watcher
+   自动接管、重启不丢），并**立即驱逐**所有绑定到该账号的会话
+   （`evictSessionBindingsForAuth`）——正在使用该账号的对话，下一次请求
+   自动路由到其他健康账号。
+3. **不参与路由**：保号账号在 `scheduler.pick` 中被整体剔除（与 disabled
+   同级过滤，先于冷却过滤），仅在**全部账号都保号**时保留全列表回落到
+   当前 pin，避免全库保号把路由锁死。
+4. **自动恢复**：积分恢复 ≥ 阈值后，watchdog 自动清除保号标记
+   （删除 `preserve` 字段），账号回到原池（优先/默认/兜底归属不变）继续
+   参与路由——保号是运行时健康闸门，与用户手动选择的池归属完全解耦。
+
+### 保号池配置
+
+| 配置键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `preserve_threshold` | `50` | 剩余积分低于该值即保号（严格小于） |
+| `preserve_watchdog_interval` | `10m` | watchdog 刷新间隔（首轮立即执行） |
+| `preserve_watchdog_enabled` | `true` | 总开关；关闭时不再新增保号成员 |
+
+面板账号卡片新增**保号**徽标（积分不足被看护的账号），汇总栏同步显示
+`保号 N` 计数。
+
+### 涉及文件（保号池）
+
+- `preserve.go`：保号集合（内存镜像）+ 物理文件 `preserve` 字段读写 +
+  配置 getter/setter
+- `watchdog.go`：定时看护循环 + 阈值翻转决策（`preserveShouldFlip`）
+- `scheduler.go`：候选收集后剔除保号账号（全部保号时保留全列表回落）
+- `session_auth.go`：`evictSessionBindingsForAuth` 会话驱逐
+- `usage_config.go`：三个保号配置键解析
+- `panel.go` / `panel.html` / `credits_handler.go`：保号徽标 + 汇总计数 +
+  单卡 `preserve` 字段
+- `watchdog_test.go`：决策表/配置/路由过滤/会话驱逐测试
+
+### 涉及文件
+
+- `credits_handler.go`：新增 `handleExportAuth` / `errString`
+- `management.go`：注册 `/export` 路由 + 加入 mutating 名单
+- `panel.html`：工具栏按钮/搜索框/排序按钮、`exportAuth`、`expandCredentials`、
+  `queuedImportItems`、`sortedAccounts` / `renderGrid` / `applyCardVisibility`
+
 ## 0.10.1
 
 ### Fix — 三池按钮文案错 + 点击无反应

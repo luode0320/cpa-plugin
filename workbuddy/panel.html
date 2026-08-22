@@ -50,6 +50,12 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mut);font-size:13px;margin-bot
 button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
 button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background:var(--btn-sec-hover)}button:disabled{opacity:.5;cursor:default}
 .toggle{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:13px}
+/* Toolbar search + sort */
+.bar .search{max-width:210px;flex:0 1 210px;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:7px 12px;color:var(--fg);font-size:13px;outline:none}
+.bar .search:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-ring)}
+.bar .search::placeholder{color:var(--placeholder)}
+.bar .sort-btn{font-size:13px;white-space:nowrap}
+.bar .sort-btn.active{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
@@ -64,6 +70,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .badge.disabled{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
 .badge.priority{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .badge.fallback{background:var(--acc-ring);color:var(--acc);border:1px solid var(--acc-border,var(--acc))}
+.badge.preserve{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border);font-style:italic}
 button.prio-on{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
@@ -205,9 +212,12 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="bar">
     <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
+    <button class="sec" id="exportBtn" onclick="exportAuth(this)" title="导出全部账号凭证为 JSON，可直接再导入">导出凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
     <button class="sec" onclick="claimTrialAll(this)" title="仅 Global · 一次性">全部领取</button>
+    <input id="searchInput" class="search" type="search" placeholder="搜索 nickname / UID" oninput="onSearchChange(this.value)" autocomplete="off">
+    <button class="sec sort-btn" id="sortBtn" onclick="toggleSort(this)" title="按可用积分切换升序/降序">积分 ↕</button>
     <label class="toggle" title="仅 CN 账号 09:00 / 21:00"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到(CN)</label>
     <span class="toggle" id="svtime"></span>
   </div>
@@ -227,7 +237,7 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button type="button" class="modal-x" onclick="closeImportModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">支持 nested <code>{"auth":{...},"account":{...}}</code> 或 flat <code>{"accessToken":...}</code>。落盘为 <code>workbuddy-&lt;uid&gt;.json</code>。</p>
+      <p class="hint">支持 nested <code>{"auth":{...},"account":{...}}</code> / flat <code>{"accessToken":...}</code> / 批量数组 / 「导出凭证」文件。落盘为 <code>workbuddy-&lt;uid&gt;.json</code>。</p>
       <textarea id="importRaw" rows="6" placeholder='粘贴 WorkBuddy / CodeBuddy 凭证 JSON'></textarea>
       <div class="file-row">
         <label class="sec" for="importFiles" title="可一次选择多个 .json 文件">📁 选择 JSON 凭证文件</label>
@@ -420,8 +430,9 @@ function card(a){
     ? `<button class="sec" data-action="toggle" data-auth-index="${esc(a.auth_index)}">启用</button>`
     : `<button class="danger" data-action="toggle" data-auth-index="${esc(a.auth_index)}" title="禁用后该账号不再参与路由选择">禁用</button>`;
   const poolBadge=curPool==="priority"?`<span class="badge priority">优先</span>`:(curPool==="fallback"?`<span class="badge fallback">兜底</span>`:"");
-  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+poolBadge+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
-  return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
+  const preserveBadge=a.preserve?`<span class="badge preserve" title="watchdog 检测到积分不足，账号暂停路由以保留积分别耗尽">保号</span>`:"";
+  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+poolBadge+(disabled?`<span class="badge disabled">已禁用</span>`:"")+preserveBadge+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
+  return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}" data-nickname="${esc(a.nickname||a.label||a.name||"")}" data-label="${esc(a.label||"")}" data-name="${esc(a.name||"")}" data-uid="${esc(a.uid||"")}">
   <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr)}
@@ -434,6 +445,72 @@ let lastAccounts=[];
 let activeAuthId="";
 let authFailCount=0;
 let authFailUntil=0;
+/* ---------- toolbar search + sort (client-side) ----------
+   Search: case-insensitive substring (模糊匹配) over nickname / label / file
+   name / uid. Sort: cycles none → 积分升序 → 积分降序 → none by
+   credits.total_remain (unknown credits count as -1, i.e. "least").
+*/
+let currentSearch="";   // trimmed, lowercase
+let currentSort="none"; // "none" | "asc" | "desc"
+const SORT_LABELS={none:"积分 ↕", asc:"积分 ↑", desc:"积分 ↓"};
+const SORT_NEXT={none:"asc", asc:"desc", desc:"none"};
+const SORT_TITLE={
+  none:"按可用积分排序（点击切升序：剩余少→多）",
+  asc:"当前：积分升序（剩余少→多），点击切降序",
+  desc:"当前：积分降序（剩余多→少），点击关闭排序"
+};
+function onSearchChange(q){
+  currentSearch=(q==null?"":String(q)).trim().toLowerCase();
+  applyCardVisibility();
+  renderSummary(lastAccounts);
+}
+function toggleSort(btn){
+  currentSort=SORT_NEXT[currentSort]||"asc";
+  if(btn){
+    btn.textContent=SORT_LABELS[currentSort];
+    btn.title=SORT_TITLE[currentSort];
+    btn.classList.toggle("active", currentSort!=="none");
+  }
+  renderGrid();
+}
+// Sort by available credits (total_remain). Unknown credits → -1 so they land
+// at the "least" end (top in asc, bottom in desc).
+function sortedAccounts(accounts){
+  const list=accounts||[];
+  if(currentSort==="none") return list;
+  const dir=currentSort==="asc"?1:-1;
+  return [...list].sort((x,y)=>{
+    const xr=x&&x.credits?Number(x.credits.total_remain||0):-1;
+    const yr=y&&y.credits?Number(y.credits.total_remain||0):-1;
+    return dir*(xr-yr);
+  });
+}
+// Full re-render honoring sort order + region/search visibility. Used by the
+// sort toggle and whenever a card's credits update while sort is active.
+function renderGrid(){
+  const g=document.getElementById("grid");
+  if(!g||!lastAccounts.length) return;
+  g.innerHTML=sortedAccounts(lastAccounts).map(card).join("");
+  bindCardActions(g);
+  applyCardVisibility();
+  renderSummary(lastAccounts);
+}
+// Toggle per-card display based on region filter + search (no re-render).
+function applyCardVisibility(){
+  const q=(currentSearch||"").toLowerCase();
+  document.querySelectorAll("#grid .card").forEach(c=>{
+    const r=c.dataset.region||"cn";
+    let show=true;
+    if(currentFilter==="all") show=true;
+    else if(currentFilter==="exhausted") show=c.querySelector(".badge.exhausted")!=null;
+    else show=r===currentFilter;
+    if(show&&q){
+      const hay=((c.dataset.nickname||"")+" "+(c.dataset.label||"")+" "+(c.dataset.name||"")+" "+(c.dataset.uid||"")).toLowerCase();
+      show=hay.includes(q);
+    }
+    c.style.display=show?"":"none";
+  });
+}
 // Lazy-load: fetch credits for all cards that lack them, concurrently.
 // Each card fetches independently; failed ones retry once after 2s.
 function lazyLoadCredits(accounts){
@@ -473,15 +550,20 @@ function lazyLoadCredits(accounts){
 function updateOneCard(a){
   const el=document.querySelector(`#grid .card[data-auth="${CSS.escape(a.auth_index)}"]`);
   if(!el) return;
-  // Build new card HTML and replace.
-  const tmp=document.createElement('div');
-  tmp.innerHTML=card(a);
-  if(tmp.firstChild){
-    const newCard=tmp.firstChild;
-    el.replaceWith(newCard);
-    bindCardActions(newCard);
+  if(currentSort!=="none"){
+    // Sort order may shift as credits arrive — full re-render keeps cards ordered.
+    renderGrid();
+  }else{
+    // Build new card HTML and replace.
+    const tmp=document.createElement('div');
+    tmp.innerHTML=card(a);
+    if(tmp.firstChild){
+      const newCard=tmp.firstChild;
+      el.replaceWith(newCard);
+      bindCardActions(newCard);
+    }
+    filterRegion(currentFilter, null);
   }
-  filterRegion(currentFilter, null);
   // Update summary + re-check selection when all done.
   const all=lastAccounts||[];
   if(all.every(x=>x.credits||x.error||x.disabled)){
@@ -504,7 +586,7 @@ function updateOneCard(a){
       });
       const g=document.getElementById("grid");
       if(g){
-        g.innerHTML=accountsForFilter(all).map(card).join("");
+        g.innerHTML=sortedAccounts(all).map(card).join("");
         bindCardActions(g);
       }
       filterRegion(currentFilter, null);
@@ -520,14 +602,7 @@ function filterRegion(region, btn){
       if(b.dataset.region===currentFilter) b.classList.add("active");
     });
   }
-  document.querySelectorAll("#grid .card").forEach(c=>{
-    const r=c.dataset.region||"cn";
-    let show=true;
-    if(currentFilter==="all") show=true;
-    else if(currentFilter==="exhausted") show=c.querySelector(".badge.exhausted")!=null;
-    else show=r===currentFilter;
-    c.style.display=show?"":"none";
-  });
+  applyCardVisibility();
   renderSummary(lastAccounts);
 }
 function updateFilterCounts(accounts){
@@ -573,13 +648,14 @@ function renderSummary(accounts){
     return;
   }
   const scoped=accountsForFilter(all);
-  let remain=0, used=0, size=0, knownN=0, disabledN=0, exhaustedN=0;
+  let remain=0, used=0, size=0, knownN=0, disabledN=0, exhaustedN=0, preserveN=0;
   let cnRemain=0, cnUsed=0, glRemain=0, glUsed=0;
   scoped.forEach(a=>{
     const c=creditOf(a);
     if(c.known){ remain+=c.remain; used+=c.used; size+=c.size; knownN++; }
     if(a.disabled) disabledN++;
     if(a.exhausted||(c.known&&c.remain===0&&(c.used>0||c.size>0))) exhaustedN++;
+    if(a.preserve) preserveN++;
   });
   let allRemain=0, allUsed=0, allSize=0;
   all.forEach(a=>{
@@ -598,7 +674,7 @@ function renderSummary(accounts){
   box.innerHTML=`
     <div class="summary-hd">
       <div class="summary-title">用量汇总 · ${esc(scopeLabel)}</div>
-      <div class="summary-meta">${scoped.length} 个账号 · 有数据 ${knownN} · 禁用 ${disabledN} · 耗尽 ${exhaustedN}</div>
+      <div class="summary-meta">${scoped.length} 个账号 · 有数据 ${knownN} · 禁用 ${disabledN} · 耗尽 ${exhaustedN} · 保号 ${preserveN}</div>
     </div>
     <div class="summary-grid">
       <div class="summary-item"><div class="k">剩余(可用)</div><div class="v ok">${remain}</div></div>
@@ -712,7 +788,7 @@ async function load(force, btn){
       if(force) toast("数据已刷新", "warn", "暂无 WorkBuddy 账号");
       return;
     }
-    g.innerHTML=accounts.map(card).join("");
+    g.innerHTML=sortedAccounts(accounts).map(card).join("");
     bindCardActions(g);
     filterRegion(currentFilter, null);
     renderSummary(accounts);
@@ -799,7 +875,7 @@ async function selectAuth(idx, btn){
     (lastAccounts||[]).forEach(a=>{a.selected=(a.auth_id===activeAuthId);});
     const g=document.getElementById("grid");
     if(g){
-      g.innerHTML=accountsForFilter(lastAccounts).map(card).join("");
+      g.innerHTML=sortedAccounts(lastAccounts).map(card).join("");
       bindCardActions(g);
     }
     filterRegion(currentFilter, null);
@@ -884,7 +960,7 @@ async function togglePool(idx, btn){
     if(a){ a.pool=d.pool||target; }
     const g=document.getElementById("grid");
     if(g){
-      g.innerHTML=accountsForFilter(lastAccounts).map(card).join("");
+      g.innerHTML=sortedAccounts(lastAccounts).map(card).join("");
       bindCardActions(g);
     }
     filterRegion(currentFilter, null);
@@ -987,8 +1063,7 @@ function onImportMaskClick(e){
 }
 async function importAuth(btn){
   const raw=(document.getElementById("importRaw").value||"").trim();
-  const items=[];
-  if(raw) items.push({name:"(粘贴)", text:raw});
+  const items=queuedImportItems(raw);
   for(const f of importQueue) items.push(f);
   if(!items.length){toast("请粘贴凭证 JSON 或选择凭证文件","warn");return}
   busy(btn,true);
@@ -1053,7 +1128,16 @@ document.getElementById("importFiles").addEventListener("change",async e=>{
     try{
       const text=await f.text();
       if(!text.trim()){skipped++;continue}
-      importQueue.push({name:f.name,text});
+      // A file may contain one credential, a JSON array, or the export wrapper
+      // (accounts[].credential) — expand arrays/wrappers into per-credential items.
+      const expanded=expandCredentials(text);
+      if(expanded&&expanded.length){
+        expanded.forEach((c,i)=>{
+          importQueue.push({name:expanded.length>1?f.name+" #"+(i+1):f.name, text:JSON.stringify(c)});
+        });
+      }else{
+        importQueue.push({name:f.name,text});
+      }
       const d=document.createElement("div");
       d.className="file-item";
       d.innerHTML='<span class="fn">'+esc(f.name)+'</span><span class="fs">'+(f.size/1024).toFixed(1)+' KB</span>';
@@ -1063,7 +1147,7 @@ document.getElementById("importFiles").addEventListener("change",async e=>{
   list.classList.toggle("show",importQueue.length>0);
   clearBtn.style.display=importQueue.length?"inline-block":"none";
   if(importQueue.length){
-    info.textContent="已选 "+importQueue.length+" 个凭证文件"+(skipped?"，跳过 "+skipped+" 个（非 .json / 超 2MB / 空内容）":"");
+    info.textContent="已选 "+importQueue.length+" 个凭证项"+(skipped?"，跳过 "+skipped+" 个文件（非 .json / 超 2MB / 空内容）":"");
     info.className="file-info"+(skipped?" bad":"");
   }else{
     info.textContent=fs.length?("没有可导入的文件"+(skipped?"（跳过 "+skipped+" 个）":"")):"";
@@ -1097,6 +1181,75 @@ async function importOne(text){
     }
     return d;
   }
+}
+/* ---------- credential export (one-click backup) ----------
+   GET /export returns {version, exported_at, count, accounts:[...]} where each
+   account carries the raw physical credential JSON. The frontend downloads it
+   as workbuddy-credentials-YYYY-MM-DD.json; the same file can be re-imported
+   through the import modal (expandCredentials below splits it back).
+*/
+async function exportAuth(btn){
+  busy(btn,true);
+  try{
+    const d=await api("/export");
+    if(d&&d.error){toast("导出失败","err",d.error);return}
+    const accounts=d&&d.accounts||[];
+    if(!accounts.length){toast("没有可导出的账号","warn");return}
+    const stamp=new Date().toISOString().slice(0,10);
+    const fname="workbuddy-credentials-"+stamp+".json";
+    const blob=new Blob([JSON.stringify(d,null,2)],{type:"application/json"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    const bad=accounts.filter(x=>x.load_error||x.parse_error).length;
+    toast("已导出 "+accounts.length+" 个账号","ok",bad?(fname+" · "+bad+" 个不完整"):fname);
+  }catch(e){
+    toast("导出失败","err",e.message||String(e));
+  }finally{
+    busy(btn,false);
+  }
+}
+/* ---------- batch import expansion ----------
+   The import modal accepts one credential per call. The export file (wrapper
+   with accounts[].credential), a bare JSON array, or a single nested/flat
+   credential all need normalizing into individual credential objects so the
+   existing per-credential /import pipeline can process them.
+*/
+function expandCredentials(text){
+  let obj;
+  try{obj=JSON.parse(text)}catch(_){return null}
+  if(!obj||typeof obj!=="object") return null;
+  const out=[];
+  const push=(c)=>{if(c&&typeof c==="object"&&!Array.isArray(c))out.push(c)};
+  if(Array.isArray(obj)){
+    obj.forEach(push);
+  }else if(Array.isArray(obj.accounts)){
+    // Export wrapper: each entry holds the raw credential under .credential
+    obj.accounts.forEach(a=>{
+      if(a&&a.credential&&typeof a.credential==="object") out.push(a.credential);
+      else push(a);
+    });
+  }else{
+    push(obj);
+  }
+  return out;
+}
+function queuedImportItems(rawText){
+  const items=[];
+  if(rawText){
+    const expanded=expandCredentials(rawText);
+    if(expanded&&expanded.length){
+      expanded.forEach((c,i)=>items.push({name:expanded.length>1?"(粘贴) #"+(i+1):"(粘贴)", text:JSON.stringify(c)}));
+    }else{
+      items.push({name:"(粘贴)", text:rawText});
+    }
+  }
+  return items;
 }
 document.getElementById("keyInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveKey()});
 document.addEventListener("keydown",e=>{

@@ -143,6 +143,17 @@ plugins:
       #   `pool` field; legacy `priority: true` auto-migrates), no restart
       #   needed.
 
+      # Preserve pool — credit watchdog. Every interval (default 10m, first
+      # tick immediate) fresh credits are pulled for every account; accounts
+      # with remaining credits below preserve_threshold (default 50) are
+      # parked in the preserve set (top-level `preserve: true` on the auth
+      # file): excluded from routing, sessions evicted, and auto-released
+      # when credits recover. Set preserve_watchdog_enabled: false to keep
+      # existing marks but stop adding new ones.
+      preserve_threshold: 50
+      preserve_watchdog_interval: "10m"
+      preserve_watchdog_enabled: true
+
       # CPAMP usage forwarding. Both must be set for any record to be sent.
       # Falls back to USAGE_REPORT_URL / USAGE_REPORT_KEY /
       # CPAMP_ADMIN_KEY env vars or docker secret files when unset here.
@@ -200,6 +211,39 @@ Rules:
 4. Toggle is live: no restart, no config change. Deleting an account also
    removes it from the pool. Legacy `priority: true` marks (v0.9.x) are
    auto-migrated to the priority pool on read.
+
+## Preserve pool (保号池)
+
+The preserve pool is a **runtime health gate**, not a 4th routing bucket: it
+temporarily shields accounts whose remaining credits just dropped below a
+threshold, so routing stops burning their last credits while the user
+recharges. Unlike `pool`, the preserve flag is toggled automatically by a
+watchdog — the user's priority/default/fallback selection is never clobbered.
+
+How it works:
+
+1. **Watchdog loop** — every `preserve_watchdog_interval` (default `10m`,
+   first tick fires immediately at plugin start) the watchdog pulls fresh
+   credits for every workbuddy account via the shared singleflight channel.
+2. **Entering preserve** — when `total_remain < preserve_threshold` (default
+   `50`, strictly less), the account gets `preserve: true` on the physical
+   auth file (host watcher picks it up; survives restart) and all session
+   bindings pinned to it are evicted, so in-flight conversations re-pick a
+   healthy account on their next request.
+3. **Routing** — preserved accounts are excluded from `scheduler.pick`
+   (filtered together with disabled accounts, before failover cooldown).
+   Only when EVERY workbuddy account is preserved does routing keep the full
+   list and fall back to the current pin, so a fleet-wide credit reset never
+   locks routing.
+4. **Recovery** — when credits recover to `>= threshold`, the watchdog clears
+   the flag (`preserve` key removed) and the account rejoins its original
+   pool automatically. Manual toggling is intentionally not exposed: preserve
+   is a health gate, not a user preference.
+
+Config knobs: `preserve_threshold` (int), `preserve_watchdog_interval`
+(duration string), `preserve_watchdog_enabled` (bool) — see the config sample
+above. The panel shows a **保号** badge on parked accounts and a `保号 N`
+counter in the summary line.
 
 ## Lifecycle
 
