@@ -1,227 +1,117 @@
-# QoderWork CPA Plugin — Loop 文档 v3
+# QoderWork 插件持续优化 LOOP
 
-> **2026-07-26 重写。PAT + 纯软件 COSY 签名已端到端验证通过。**
-> **废弃：WASM 签名、qodercli 子进程、device_token 直签。**
-
----
-
-## 架构（最终版，已实测 200 OK）
-
-```
-CPA Gateway
-  └─ qoderwork plugin (Go, c-shared)
-       ├─ auth: PAT → jobToken/exchange → jt-/jrt-
-       ├─ sign: COSY (RSA + AES-CBC + MD5) 纯 Go
-       ├─ encode: QoderEncoding (custom base64 + 三段重排)
-       ├─ infer: POST gateway.qoder.com.cn/algo/.../agent_chat_generation
-       ├─ checkin: /sash/api/v1/me/daily-check-in/* (jt- Bearer)
-       └─ quota: /api/v2/quota/usage (jt- Bearer)
-```
-
-**为什么这条路：**
-- ✅ 已实测：qwen3.8-max 返回 "Hi!"，SSE 正常，usage 正确
-- ✅ 无需 WASM：签名是纯软件算法，Go 标准库全覆盖
-- ✅ 无需子进程：桌面端 WorkerTransport 直签，不 spawn CLI
-- ✅ PAT 100 年有效，jobToken 24h+48h 自动 refresh，无需重复登录
-- ✅ 开源验证：cubk1/qoder2api (Java 73★)、bzym2/QoderGateway (Python 13★) 都是这条路
+> **版本：** v1.1
+> **创建：** 2026-07-27
+> **当前线上版本：** qoderwork v0.2.5
+> **仓库：** https://github.com/Sliverkiss/cpa-plugin （子目录 `qoderwork/`）
+> **部署：** `/root/cpa-manager-plus/cliproxyapi/plugins/qoderwork-v<VERSION>.so`
 
 ---
 
-## 技术要点速查
+## 核心 5 要素（每轮必读）
 
-### PAT 能力边界
+### 1. 目标（What）
+让 qoderwork 插件成为**独立、生产级、CN-only** 的 CPA provider，与 workbuddy 平级、互不干扰。功能上对标 workbuddy 体验，但**接口与逻辑必须按 QoderWork 自己的规范**（KNOWLEDGE.md），不是照抄。
 
-| 能力 | PAT (pt-) | jobToken (jt-) | 备注 |
+### 2. 边界（Boundary）
+- ✅ **只许改 `/root/qoderwork/qoderwork/`** 下的文件
+- ✅ **可改 `/root/cpa-manager-plus/cliproxyapi/config.yaml`**（仅追加 qoderwork 节，不动其他）
+- ✅ **可参考** `/root/qoderwork/workbuddy/`（仅作对照，不改它的源码）
+- ❌ **禁止改** CPA 源码、CPA 前端、workbuddy 源码、其他插件
+- ❌ **禁止改** host / docker / network 配置（除 .so 部署 + config.yaml qoderwork 节）
+- ❌ **禁止** 在 auth 文件 schema 之外加自定义字段（沿用 storedAuth 已有字段）
+
+### 3. 规范（How）
+- **每步必 commit**（feat/fix/refactor/docs 前缀 + 一句话动机 + 影响面）
+- **大改动前写分析 MD**到 `/root/qoderwork/analysis/<topic>.md`（决策依据 + 影响范围 + 验证方法）
+- **子 agent 只许分析扫描**，**禁止让他们改代码**——所有修改由 Hermes 主进程执行
+- **编译 + 部署 + 实测**才算完成（不许停在"编译通过"）
+- **每完成一个 Loop 在 LOOP.md 勾选 + 一行结论**
+
+### 4. 现状基线（Current State）
+- ✅ v0.1.11 运行中：1 CN 账号（aliyun6109533651，2200 credits/Pro Trial）
+- ✅ PAT 导入 / 两级 token 刷新 / COSY 签名 / 嵌套 SSE / 签到（1s）/ 模型清单（10 静态 + 10 别名）/ 隔离
+- ⚠️ **OAuth 登录卡片**：仍是 workbuddy 风格"等待插件保存认证文件"——需改为 **Vertex JSON 风格表单**（直接粘 PAT + 一键导入）
+- ⚠️ **auth 自动刷新**：keepalive 已实现 22:00 调度，但**未验证**真实跑过
+- ⚠️ **测试文件**：125 个 workbuddy 测试大量失效或逻辑不对——**未清理**
+- ⚠️ **死代码**：仍可能有 workbuddy 残留（`active_auth.go`/`policy.go`/`lifecycle.go`/`scheduler.go`/`usage.go`/`usage_config.go`/`cache.go`/`redact.go`/`stream.go`/`panel.go`）
+
+### 5. 候选目标池（Backlog）
+按优先级排：
+
+| ID | 目标 | 价值 | 状态 |
 |---|---|---|---|
-| 换 jobToken | ✅ | — | `POST /api/v1/jobToken/exchange` |
-| 推理对话 | ❌ 401 | ✅ | 需 COSY 签名 |
-| 签到 | ❌ | ✅ | `/sash/api/v1/me/daily-check-in/*` |
-| 积分查询 | ❌ | ✅ | `/api/v2/quota/usage` |
-| 用户信息 | ❌ | ✅ | `/api/v1/userinfo` |
-| 有效期 | 100 年（创建时填） | 24h（jrt- 48h 可 refresh） | |
+| **L1** | OAuth 登录卡片改为 Vertex JSON 风格（PAT 表单） | 🔥 高 | ⏸ 待做 |
+| **L2** | auth 每晚 22:00 自动刷新（验证 keepalive 真实生效） | 🔥 高 | ⏸ 待做 |
+| **L3** | 全面扫描死代码/无效代码/低效逻辑（子 agent 分析） | 🔥 高 | ⏸ 待做 |
+| **L4** | 清理 `_test.go`（125 个 workbuddy 测试：删/改/留） | 🟡 中 | ⏸ 待做 |
+| **L5** | 动态模型清单（COSY 拉 /algo/api/v2/model/list） | 🟡 中 | ⏸ 待做 |
+| **L6** | auth 文件 OAuth 别名映射（auth attributes） | 🟢 低 | ⏸ 待做 |
+| **L7** | lifecycle/scheduler/policy/active_auth 逻辑审计（是否还需要） | 🟡 中 | ⏸ 待做 |
+| **L8** | stream/usage/usage_config/cache/redact 死代码扫描 | 🟡 中 | ⏸ 待做 |
+| **L9** | panel.html 剩余 workbuddy 字符串/逻辑清理 | 🟢 低 | ⏸ 待做 |
+| **L10** | LICENSE 归属声明优化（保留 lovingfish 归属，加 Sliverkiss 修改） | 🟢 低 | ✅ 完成 |
+| **L11** | **auth 分类修复（CPA 原生 type 契约对齐）**：给存量 29 个 workbuddy 文件补 `"type"` 字段 + ParseAuth 加 type 防御 | 🔥 高 | ✅ v0.1.19 |
+| **L12** | **真·OAuth 设备授权登录**（替代 PAT）：PKCE + device/selectAccounts + deviceToken/poll → dt-/drt-；deviceToken/refresh；与 PAT 家族共存兼容 | 🔥 高 | ✅ v0.2.5 |
 
-### COSY 签名核心（Go 伪码）
+---
 
-```go
-tempKey := randomBytes(16)
-cosyKey := b64(rsaPKCS1v15(pubKey, tempKey))
-info := b64(aesCBC(json(identity), tempKey, tempKey))
-payloadB64 := b64(jsonSorted({cosyVersion:"0.1.43", info, requestId, version:"v1"}))
-sig := md5(payloadB64 + "\n" + cosyKey + "\n" + ts + "\n" + body + "\n" + path)
-Authorization: "Bearer COSY." + payloadB64 + "." + sig
-```
-
-### QoderEncoding
+## Loop 执行流（每轮）
 
 ```
-自定义字母表: _doRTgHZBKcGVjlvpC,@aFSx#DPuNJme&i*MzLOEn)sUrthbf%Y^w.(kIQyXqWA!
-padding: $
-步骤: base64(plain) → 三段重排 std[n-a:] + std[a:n-a] + std[:a] → 映射到自定义字母表
+读 LOOP.md → 选目标 → 写分析 MD → 实施（commit）→ 部署 + 实测 → 更新 LOOP.md
 ```
 
-### 推理端点
+每轮**最多 1-2 个目标**，不批量。
+
+---
+
+## Loop 进度
+
+（每完成一项填一行）
+
+- [x] **L1** ~~OAuth 登录卡片 Vertex 化~~ → v0.1.12 已做但用户判定未达预期；**2026-07-27 用户指示：登录卡片问题跳过不管**
+- [x] **L2** keepalive 自动刷新验证 → v0.1.13 / commit de8ee8b（tokenData JSON tag 错误 camelCase→snake_case，删 tokenData 统一用 jobTokenResponse）
+- [x] **L3** 子 agent 全面死代码扫描 → 完成（DEAD_CODE_REPORT.md 生成，16 项死代码已派 Claudium 清理）
+- [x] **L4** 测试文件清理 → 无 _test.go 文件（已删）
+- [x] **L5** 动态模型清单 → v0.1.15 / commit a844266（COSY 签名调 /algo/api/v2/model/list，解析 chat scene）
+- [x] **L6** auth 文件别名映射 → 已实现（config.yaml oauth-model-alias + parseModelAliasAttribute per-auth 覆盖）
+- [x] **L7** lifecycle/scheduler 审计 → go vet clean（C-ABI 调度，grep 不适用）
+- [x] **L8** stream/usage/cache 死代码扫描 → 删 extractAccessToken（17 行）；go vet clean
+- [x] **L9** panel.html 深度清理 → 无 workbuddy/codebuddy/Global 残留
+- [x] **L10** LICENSE 优化 → 已正确（Sliverkiss based on workbuddy by lovingfish）
+- [x] **L11** auth 分类修复（CPA 原生 type 契约对齐）→ qoderwork v0.1.19 / commit 7b776a9 + workbuddy v0.8.4 / commit 86ba51e（存量 29 文件补 type + 双插件 ParseAuth 对称防御；写入侧核查均合规；双 provider chat 实测通过）
+
+---
+
+## 已解决问题（不再重复）
+
+- ✅ auth 文件隔离（文件名前缀过滤）→ v0.1.5 / commit aaf6bd3
+- ✅ billingBase 域名错（codebuddy.cn → openapi.qoder.com.cn）→ v0.1.8
+- ✅ panel JS `elGl` undefined → v0.1.9 / commit 026f286
+- ✅ OAuth 别名映射（qoder/qwen3.8-max 等 10 个）→ v0.1.9 / config.yaml
+- ✅ 签到 30s 卡死（workbuddy 三段式 → 直接 GET+POST）→ v0.1.11 / commit 660b229
+
+---
+
+## 决策原则
+
+1. **接口对齐 KNOWLEDGE.md**，不对齐 workbuddy
+2. **代码宁少勿多**——能 50 行写完不写 200 行
+3. **能复用 host bridge / schedulerLoop / OAuthModelAlias 就不自造**
+4. **每个修复必须有可观察的"之前 X，现在 Y"对比**
+5. **不留 debug 日志到 release**（debug 加 → 验证 → 删）
+
+---
+
+## 输出模板（每轮结束）
 
 ```
-POST https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation
-     ?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1
-
-Headers: cosy-data-policy, cosy-machinetype, cosy-clienttype=5, cosy-date, cosy-user,
-         cosy-key, cosy-clientip, authorization, cosy-version=0.1.43, cosy-machineid,
-         cosy-machinetoken, login-version=v2, x-model-key=<model>, x-model-source=system
-
-Body: qoderEncode(json(baseprompt_template))
+## Loop <N> — <标题>
+- 目标：L<ID> <一句话>
+- 分析：/root/qoderwork/analysis/<topic>.md
+- 修改：commit <sha>（+X/-Y 行）
+- 验证：<实测结果，含 before/after>
+- 状态：✅ 上线 v0.1.<N>
+- 下一 Loop 候选：L<ID>
 ```
-
-### 模型 key 映射
-
-| Qoder key | 后端 | price_factor |
-|---|---|---|
-| auto | Smart Routing | 1.0x |
-| ultimate | 专家级 | 1.6x |
-| performance | 高级 | 1.1x |
-| efficient | 标准 | 0.3x |
-| lite | 免费 | Free |
-| qwen3.8-max | Qwen3.8-Max | 已验证 |
-| qmodel | Qwen3.7-Max | 0.5x |
-| q35model | Qwen3.7-Plus | 0.1x |
-| dmodel | DeepSeek-V4-Pro | 0.5x |
-| dfmodel | DeepSeek-V4-Flash | 0.1x |
-| gm51model | GLM-5.2 | 0.6x |
-| kmodel | Kimi-K3 | 0.8x |
-| mmodel | MiniMax-M3 | 0.2x |
-
----
-
-## Loop 1: Plugin 骨架（~30min）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 1.1 | go.mod + CPA SDK v7 | go mod tidy 成功 |
-| 1.2 | main.go C ABI | c-shared 编译通过 |
-| 1.3 | RPC dispatch stub | CPA 加载不 panic |
-| 1.4 | plugin register | CPAMP 显示 |
-| 1.5 | model.static | /v1/models 含 qoder-* |
-| 1.6 | Makefile | make build → .so |
-
----
-
-## Loop 2: Auth 模块（~1h）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 2.1 | auth.login_start: 提示填 PAT | 返回 manual_instructions |
-| 2.2 | auth.parse: 接受 PAT JSON | 解析 pt- 成功 |
-| 2.3 | auth.refresh: jobToken/refresh | jt- 换新成功 |
-| 2.4 | auth_storage | qoderwork-<uid>.json 落盘 |
-| 2.5 | PAT → jobToken exchange | 返回 jt-/jrt- |
-| 2.6 | jt- 过期检测 + 自动 refresh | 401 时触发 |
-
----
-
-## Loop 3: COSY 签名 + Encoding（~1h）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 3.1 | sign.go: RSA/AES/MD5 | 与 Python 输出一致 |
-| 3.2 | encoding.go: qoderEncode/Decode | 与 Python 输出一致 |
-| 3.3 | bearer.go: buildBearer | 生成完整 Authorization |
-| 3.4 | headers.go: buildHeaders | 15 个 headers 全 |
-| 3.5 | 单元测试 | go test PASS |
-
----
-
-## Loop 4: 对话执行（~1.5h，核心）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 4.1 | body.go: 构造 baseprompt | 字段完整 |
-| 4.2 | executor.execute_stream | SSE 流式输出 |
-| 4.3 | executor.execute | 非流式聚合 |
-| 4.4 | SSE 解析: data:{"body":"..."} → OpenAI delta | 正确转换 |
-| 4.5 | 模型路由: CPA name → x-model-key | qwen3.8-max 通 |
-| 4.6 | 错误处理: 401 → refresh → 重试 | 自动恢复 |
-| 4.7 | 超时/取消 | context.Context |
-
-**验收：** `curl CPA/v1/chat/completions -d '{"model":"qwen3.8-max","messages":[{"role":"user","content":"hi"}]}'` 返回流式
-
----
-
-## Loop 5: 签到 + 积分（~30min）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 5.1 | credits 查询 | total/used/remaining |
-| 5.2 | 签到状态 | CLAIMABLE/CLAIMED |
-| 5.3 | 签到领取 | +100 credits |
-| 5.4 | 定时签到 goroutine | 09:00/21:00 UTC+8 |
-| 5.5 | 耗尽自动 disable | lifecycle |
-
----
-
-## Loop 6: 多账号调度（~30min）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 6.1 | scheduler.pick | 按 remaining 选 |
-| 6.2 | 跳过 disabled | 正确过滤 |
-| 6.3 | 并发安全 | 无竞态 |
-
----
-
-## Loop 7: 管理界面 + 部署（~1h）
-
-| # | 任务 | 验收 |
-|---|---|---|
-| 7.1 | management routes | CPAMP 显示 |
-| 7.2 | panel.html | 渲染正确 |
-| 7.3 | 编译 arm64+amd64 | .so 生成 |
-| 7.4 | 部署 CPA | plugin 加载 |
-| 7.5 | E2E | 全流程通 |
-| 7.6 | README + GitHub push | tag v0.1.0 |
-
----
-
-## 时间线
-
-| Loop | 预计 | 累计 | 难度 |
-|---|---|---|---|
-| 1. 骨架 | 30min | 30min | ⭐ |
-| 2. Auth | 1h | 1.5h | ⭐⭐ |
-| 3. 签名 | 1h | 2.5h | ⭐⭐ |
-| 4. 对话 | 1.5h | 4h | ⭐⭐⭐ |
-| 5. 签到 | 30min | 4.5h | ⭐ |
-| 6. 调度 | 30min | 5h | ⭐ |
-| 7. 部署 | 1h | 6h | ⭐⭐ |
-
-**总计 ~6 小时**（比 v2 少 1h，省掉 WASM 和子进程管理）
-
----
-
-## 执行策略
-
-- **Loop 1-3**: Hermes 直接写（参考 workbuddy + cubk1）
-- **Loop 4**: Hermes 写框架 + 实测（已有 Python 参考）
-- **Loop 5-7**: Claudium 后台（逻辑明确，多文件）
-
----
-
-## 风险矩阵
-
-| 风险 | 概率 | Loop | 影响 | 回退 |
-|---|---|---|---|---|
-| Go 签名细节差异 | 低 | 3 | 401 | 对照 Python diff |
-| jobToken refresh 未验证 | 中 | 2 | 24h 后失败 | PAT 重换 |
-| 模型 key 映射不全 | 中 | 4 | 404 | 从 CLI bundle 抄 |
-| Qoder 封自动化 | 低 | all | 账号封 | 限速 |
-| SSE 嵌套 JSON 解析 | 低 | 4 | 解析错 | 格式已固定 |
-
----
-
-## 关键参考
-
-- **Python 验证脚本（已通过）：** `/tmp/qw_web/qoder_chat_test.py`
-- **Body 模板：** `/tmp/qw_web/baseprompt_clean.json`
-- **Java 参考：** `github.com/cubk1/qoder2api`
-- **Python 参考：** `github.com/bzym2/QoderGateway`
-- **JS 原始：** `/tmp/qw_extract/app/resources/asar_out/out/main/main.js:2614427-2616623`
-- **PAT 获取：** `/root/qoderwork/scripts/qoder_cn_pat_login.py`
