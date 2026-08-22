@@ -382,7 +382,6 @@ cr, err := fetchUserResource(sa)
 			"label":      f.Label,
 			"disabled":   f.Disabled,
 			"selected":   getActiveAuthID() == f.ID,
-			"pool":       poolFor(f.ID),
 			"preserve":   isPreserve(f.ID),
 		}
 			if err != nil {
@@ -443,75 +442,4 @@ cr, err := fetchUserResource(sa)
 		out = append(out, ac)
 	}
 	return map[string]any{"accounts": out}
-}
-
-// handlePoolToggle assigns one account to a routing pool.
-//
-// Body: {auth_index, pool: "default"|"priority"|"fallback"}
-//   - priority → account joins the preferred pool; while ≥1 priority account is
-//     usable, scheduler.pick routes ONLY from this bucket.
-//   - fallback → account joins the last-resort pool; used only when both the
-//     priority and the default bucket have no usable account.
-//   - default → account returns to the normal pool (the implicit state).
-//
-// The pool only affects routing — it does NOT change disabled/enabled state,
-// credits, or session stickiness. An account is still skipped when it's
-// disabled/exhausted/cooling-down, and the cascade moves to the next-lower
-// pool so traffic never errors out.
-//
-// Idempotent: re-assigning the current pool is a no-op success.
-func handlePoolToggle(req pluginapi.ManagementRequest) map[string]any {
-	var body struct {
-		AuthIndex string `json:"auth_index"`
-		Pool      string `json:"pool"`
-	}
-	_ = json.Unmarshal(req.Body, &body)
-	authIndex := strings.TrimSpace(body.AuthIndex)
-	if authIndex == "" {
-		return map[string]any{"error": "auth_index is required"}
-	}
-	target := strings.TrimSpace(body.Pool)
-	if !validPool(target) {
-		return map[string]any{"error": "pool (default|priority|fallback) is required", "auth_index": authIndex}
-	}
-	files, err := hostAuthList()
-	if err != nil {
-		return map[string]any{"error": err.Error(), "auth_index": authIndex}
-	}
-	for _, f := range files {
-		if f.AuthIndex != authIndex {
-			continue
-		}
-		sa, err := hostAuthGet(f.AuthIndex)
-		if err != nil {
-			return map[string]any{"error": err.Error(), "auth_index": authIndex}
-		}
-		// Idempotency: if the in-memory pool already matches the target, skip
-		// the disk write. (Disk truth is re-validated on next /accounts — when
-		// the file disagrees due to a manual edit, the write below converges.)
-		if poolFor(f.ID) == target {
-			return map[string]any{
-				"ok":         true,
-				"idempotent": true,
-				"auth_index": authIndex,
-				"auth_id":    f.ID,
-				"pool":       target,
-				"nickname":   sa.Account.Nickname,
-				"pool_sizes": refreshAuthPoolFromDisk(),
-			}
-		}
-		if err := persistPoolToggle(authIndex, f.ID, target); err != nil {
-			return map[string]any{"error": err.Error(), "auth_index": authIndex}
-		}
-		return map[string]any{
-			"ok":         true,
-			"auth_index": authIndex,
-			"auth_id":    f.ID,
-			"pool":       target,
-			"nickname":   sa.Account.Nickname,
-			"uid":        sa.Account.UID,
-			"pool_sizes": refreshAuthPoolFromDisk(),
-		}
-	}
-	return map[string]any{"error": "account not found", "auth_index": authIndex}
 }

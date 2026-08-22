@@ -1,23 +1,25 @@
 // preserve.go manages the "preserve" status — accounts flagged to be kept
 // idle so they keep a small credit buffer and never carry traffic.
 //
-// Why a status field instead of a 4th pool: pool is the user's *intent*
-// (priority / default / fallback). Preserve is a *runtime health gate* —
-// accounts temporarily shielded because their credit balance just dropped
-// below a threshold. Mixing them would mean the user's priority/default/
-// fallback selection gets clobbered whenever credits fluctuate, then they
-// have to re-click the toggle when credits recover. Splitting the two
-// concerns keeps the user-facing pool stable and the health gate dynamic.
+// Preserve is a *runtime health gate*: the watchdog (watchdog.go) refreshes
+// credits every interval (default 10m) and shields any account whose balance
+// dropped below the threshold, then releases it automatically when credits
+// recover. Accounts not in the preserve set are "normal" — they route
+// normally. There is no manual pool selection anymore (the v0.10.x
+// priority/default/fallback pools were removed in v0.12.0); preserve is the
+// only status that separates accounts.
 //
 // Routing contract (scheduler.pick):
 //  1. Drop disabled accounts.
 //  2. Drop preserve accounts (this file).
 //  3. Drop cooling-down accounts (accountFailover.go).
-//  4. Cascade priority → default → fallback on the survivors.
+//  4. Route on the survivors (all "normal" accounts are equal).
 //
 // Preserve filter is *before* cooldown so a freshly preserved account that
 // then 429s doesn't double-count (cooldown's filter still applies to the
-// survivors). lastNonEmpty fallback mirrors the cooldown behavior.
+// survivors). When EVERY workbuddy account is preserved the full list is
+// kept so the pickers fall back to the current pin (fleet-wide credit reset
+// must not lock routing).
 package main
 
 import (
@@ -203,7 +205,7 @@ func parsePreserveFromAuthJSON(raw []byte) bool {
 // Uses writeAuthFileDirect (NOT host.auth.save) because the host silently
 // drops unrecognized top-level fields on save. Direct write lets the host's
 // file watcher re-synthesize the auth record with the new top-level field
-// preserved alongside disabled / note / pool / manual_disable / etc.
+// preserved alongside disabled / note / manual_disable / etc.
 //
 // on=true sets preserve: true; on=false drops the key entirely so the file
 // stays clean and parsePreserveFromAuthJSON returns false on the next read.
@@ -223,8 +225,8 @@ func persistPreserveToggle(authIndex, authID string, on bool) error {
 	var doc map[string]any
 	if err := json.Unmarshal(phys.JSON, &doc); err != nil {
 		// Treat malformed JSON as a fresh doc — losing the existing top-level
-		// flags is better than refusing the write (consistent with
-		// persistPoolToggle).
+		// flags is better than refusing the write (consistent with the other
+		// direct-write toggles such as manual_disable).
 		doc = map[string]any{}
 	}
 	if on {
@@ -246,3 +248,15 @@ func persistPreserveToggle(authIndex, authID string, on bool) error {
 	}
 	return nil
 }
+
+// authFileErr is a tiny error wrapper used by the auth-file write helpers.
+// Inlined here (was pool.go's poolErr) so deleting the pool code doesn't
+// leave preserve.go with a dangling dependency.
+type authFileErr struct{ msg string }
+
+func (e *authFileErr) Error() string { return e.msg }
+
+// errAuthIndexRequired / errAuthMissing are tiny helpers so persistPreserveToggle
+// returns stable error values without allocating fmt.Errorf strings.
+func errAuthIndexRequired() error { return &authFileErr{msg: "auth_index is required"} }
+func errAuthMissing() error       { return &authFileErr{msg: "auth file missing or empty"} }

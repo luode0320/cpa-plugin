@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.12.0
+
+### Breaking Change — 移除三池路由（priority / default / fallback），只留保号池
+
+v0.10.0 引入的三池路由（面板三态按钮 + `POST /pool` + auth 文件 `pool`
+字段 + 三桶级联）在 v0.12.0 中**整体移除**。实测反馈：手动归池需要
+逐账号点击维护，远不如保号池"自动扫描归池"省心。路由收敛为两种状态：
+
+- **正常**：未保号账号按既有 session/credits 逻辑正常参与路由（等同旧
+  default 池行为）。
+- **保号**：watchdog 每 `preserve_watchdog_interval`（默认 10m）刷新全部
+  账号积分，剩余 < `preserve_threshold`（默认 50）自动保号、不参与路由；
+  恢复 ≥ 阈值自动解除——**0.11.0 引入的保号机制完整保留，无任何行为
+  变化**。
+
+移除明细：
+
+- `pool.go` / `pool_test.go` 整套删除（池内存镜像、三桶级联、12 个测试）。
+- 面板三态按钮（默认→优先→兜底循环）与优先/兜底 badge 删除，只保留
+  **保号** badge 与汇总计数。
+- `POST /plugins/workbuddy-provider/pool` 端点删除；`management.go` 路由表、
+  mutating 白名单同步清理。
+- `scheduler.pick` 不再分桶：候选链路收敛为「收集 → 剔除 disabled →
+  剔除保号（全保号保留全量防锁死）→ 剔除冷却（全冷却保留全量保 pin）→
+  session/credits 选择」。
+- 旧错误函数 `errAuthIndexRequired` / `errAuthMissing` 内联进 `preserve.go`
+  （原本定义在 pool.go 但被 preserve.go 复用）；测试辅助 `storeCredits`
+  迁入 `watchdog_test.go`。
+
+存量数据说明：auth 文件上遗留的 `pool` / `priority` 字段**不再解析**
+（忽略式读取，零风险），也不做批量写盘清理——字段本身无害，保留原样。
+
+### 涉及文件
+
+- 删除：`pool.go`、`pool_test.go`
+- `preserve.go`：内联错误函数；`watchdog_test.go`：迁移 `storeCredits`、
+  清理 `resetAuthPool` 引用、`pool` 字段反例改为"不影响保号解析"语义
+- `scheduler.go`：删三桶级联与 `anyCandidateUsable`
+- `credits_handler.go`：删 `/pool` 端点与单卡 `pool` 字段
+- `management.go`：删 `/pool` 路由注册与 mutating 白名单条目
+- `lifecycle.go`：删两处 `clearPoolFor`
+- `authfile.go`：删 `parsePoolFromAuthJSON`（含 legacy priority 迁移）
+- `panel.go` / `panel.html`：删 Pool 字段、pool_sizes、三态按钮与 badge
+- `README.md` / `README_CN.md`：删三池章节与配置注释，更新保号章节措辞
+
 ## 0.11.0
 
 ### Feature — 凭证导出 + 账号搜索 + 按积分排序
@@ -53,8 +98,8 @@
    同级过滤，先于冷却过滤），仅在**全部账号都保号**时保留全列表回落到
    当前 pin，避免全库保号把路由锁死。
 4. **自动恢复**：积分恢复 ≥ 阈值后，watchdog 自动清除保号标记
-   （删除 `preserve` 字段），账号回到原池（优先/默认/兜底归属不变）继续
-   参与路由——保号是运行时健康闸门，与用户手动选择的池归属完全解耦。
+   （删除 `preserve` 字段），账号回到正常池继续参与路由——保号是运行时
+   健康闸门，与账号的池归属完全解耦（v0.12.0 起池归属仅剩"正常"一态）。
 
 ### 保号池配置
 

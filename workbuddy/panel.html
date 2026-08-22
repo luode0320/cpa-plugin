@@ -68,10 +68,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .badge.cn{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
 .badge.global{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .badge.disabled{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
-.badge.priority{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
-.badge.fallback{background:var(--acc-ring);color:var(--acc);border:1px solid var(--acc-border,var(--acc))}
 .badge.preserve{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border);font-style:italic}
-button.prio-on{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
 .ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
@@ -366,28 +363,11 @@ function bindCardActions(root){
       if(act==="checkin") checkin(idx, ev.currentTarget);
       else if(act==="claim") claimTrial(idx, ev.currentTarget);
       else if(act==="select") selectAuth(idx, ev.currentTarget);
-      else if(act==="pool") togglePool(idx, ev.currentTarget);
       else if(act==="refresh") refreshCredits(idx, ev.currentTarget);
       else if(act==="toggle") toggleAuth(idx, ev.currentTarget);
     });
   });
 }
-// Routing-pool cycle mappings. Hoisted to module scope so both card() (used by
-// re-render) and togglePool() (the click handler) can reach them — declaring
-// them inside card() broke the click handler with a ReferenceError that was
-// silently swallowed by try/catch, making the buttons look "dead".
-//
-// Cycle: default → priority → fallback → default. The button shows the
-// CURRENT pool state; the badge (already correct) shows the same. Click
-// requests the NEXT state.
-const POOL_NAMES = {default:"默认", priority:"优先", fallback:"兜底"};
-const POOL_NEXT = {default:"priority", priority:"fallback", fallback:"default"};
-const POOL_BTN_LABEL = {default:"默认", priority:"优先", fallback:"兜底"};
-const POOL_BTN_TITLE = {
-  default: "当前为默认池。点击切换到优先池：有可用优先账号时路由只用优先账号",
-  priority: "当前为优先池。点击切换到兜底池：优先/默认账号耗尽后才用该账号",
-  fallback: "当前为兜底池。点击恢复默认池"
-};
 function card(a){
   const plan=(a.plan||"unknown").toLowerCase();
   const ci=a.checkin||{}, cr=a.credits;
@@ -415,13 +395,6 @@ function card(a){
   const selectBtn=selected
     ? `<button class="done" disabled="disabled">使用中</button>`
     : (disabled?``:`<button class="sec" data-action="select" data-auth-index="${esc(a.auth_index)}">选用</button>`);
-  // Routing pool cycle button: default → priority → fallback → default. The
-  // button shows the CURRENT pool state (see POOL_BTN_LABEL/POOL_BTN_TITLE
-  // declared at module scope); the badge shows the same. Live — no restart
-  // needed; the pool is persisted on the auth file. scheduler.pick cascades
-  // priority → default → fallback.
-  const curPool=(a.pool==="fallback"||a.pool==="priority")?a.pool:"default";
-  const poolBtn=`<button class="sec${curPool==="priority"?" prio-on":""}" data-action="pool" data-auth-index="${esc(a.auth_index)}" title="${POOL_BTN_TITLE[curPool]}">${POOL_BTN_LABEL[curPool]}</button>`;
   const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
   // Manual enable/disable toggle. Disabled accounts show "启用"; live accounts
   // show a danger-styled "禁用". Disabling the active account is allowed — the
@@ -429,15 +402,14 @@ function card(a){
   const toggleBtn=disabled
     ? `<button class="sec" data-action="toggle" data-auth-index="${esc(a.auth_index)}">启用</button>`
     : `<button class="danger" data-action="toggle" data-auth-index="${esc(a.auth_index)}" title="禁用后该账号不再参与路由选择">禁用</button>`;
-  const poolBadge=curPool==="priority"?`<span class="badge priority">优先</span>`:(curPool==="fallback"?`<span class="badge fallback">兜底</span>`:"");
   const preserveBadge=a.preserve?`<span class="badge preserve" title="watchdog 检测到积分不足，账号暂停路由以保留积分别耗尽">保号</span>`:"";
-  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+poolBadge+(disabled?`<span class="badge disabled">已禁用</span>`:"")+preserveBadge+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
+  const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+preserveBadge+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${plan}">${esc(a.plan||"-")}</span>`;
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}" data-nickname="${esc(a.nickname||a.label||a.name||"")}" data-label="${esc(a.label||"")}" data-name="${esc(a.name||"")}" data-uid="${esc(a.uid||"")}">
   <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${progressHTML(cr)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
-  <div class="actions">${selectBtn}${poolBtn}${refreshBtn}${actionHTML}${toggleBtn}</div>
+  <div class="actions">${selectBtn}${refreshBtn}${actionHTML}${toggleBtn}</div>
   </div>`;
 }
 let currentFilter="all";
@@ -934,39 +906,6 @@ async function toggleAuth(idx, btn){
     await load(false);
   }catch(e){
     toast("操作失败","err",e.message||String(e));
-    busy(btn,false);
-  }
-}
-async function togglePool(idx, btn){
-  // Cycle the pool forward: default → priority → fallback → default. The
-  // backend receives the explicit target pool so double-clicks are idempotent.
-  // Cycle/label maps are hoisted at module scope (see POOL_NEXT/POOL_NAMES
-  // near the top of this script).
-  const a=(lastAccounts||[]).find(x=>x.auth_index===idx);
-  const cur=(a&&(a.pool==="fallback"||a.pool==="priority"))?a.pool:"default";
-  const target=POOL_NEXT[cur]||"priority";
-  busy(btn,true);
-  try{
-    const d=await api("/pool",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({auth_index:idx,pool:target})});
-    if(d.error){
-      toast("池设置失败","err",d.error);
-      busy(btn,false);
-      return;
-    }
-    const who=d.nickname||idx;
-    const ps=d.pool_sizes||{};
-    toast(`已设为${POOL_NAMES[target]||target}池`,"ok",who+(ps.priority!=null?` · 优先 ${ps.priority} / 兜底 ${ps.fallback!=null?ps.fallback:0}`:""));
-    // Update local state and re-render instantly for immediate feedback.
-    if(a){ a.pool=d.pool||target; }
-    const g=document.getElementById("grid");
-    if(g){
-      g.innerHTML=sortedAccounts(lastAccounts).map(card).join("");
-      bindCardActions(g);
-    }
-    filterRegion(currentFilter, null);
-  }catch(e){
-    toast("池设置失败","err",e.message||String(e));
-  }finally{
     busy(btn,false);
   }
 }

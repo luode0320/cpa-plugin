@@ -129,43 +129,12 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 		wbCandidates = filtered
 	}
 
-	// Pool bucketing: split candidates into priority / default / fallback
-	// buckets by the on-disk `pool` marker (absent marker = default). Routing
-	// cascades strictly down poolOrder: the first bucket that has ≥1 usable
-	// account (not exhausted, not cooling down) is the ONLY one the picker
-	// sees — traffic never leaks into lower tiers while a higher tier is
-	// alive. When a bucket is empty or every member is exhausted/cooling-down,
-	// routing cascades to the next tier. If NO bucket has a usable account,
-	// the lowest non-empty bucket still wins so the pickers fall back to the
-	// current pin (mirrors the pre-pool all-exhausted behavior) instead of
-	// leaking into a higher-tier cooling-down account.
-	buckets := make(map[string][]pluginapi.SchedulerAuthCandidate, 3)
+	// Build thin view for active-auth picker. All surviving candidates are
+	// "normal" accounts — the v0.10.x priority/default/fallback pools were
+	// removed in v0.12.0; preserve + cooldown filters above are the only
+	// separations left.
+	cands := make([]activeAuthCandidate, 0, len(wbCandidates))
 	for _, c := range wbCandidates {
-		p := poolFor(c.ID)
-		buckets[p] = append(buckets[p], c)
-	}
-	use := wbCandidates
-	lastNonEmpty := wbCandidates
-	locked := false
-	for _, p := range poolOrder {
-		b := buckets[p]
-		if len(b) == 0 {
-			continue
-		}
-		lastNonEmpty = b
-		if anyCandidateUsable(b) {
-			use = b
-			locked = true
-			break
-		}
-	}
-	if !locked {
-		use = lastNonEmpty
-	}
-
-	// Build thin view for active-auth picker.
-	cands := make([]activeAuthCandidate, 0, len(use))
-	for _, c := range use {
 		_, exhausted := cachedCreditsScore(c.ID)
 		cands = append(cands, activeAuthCandidate{
 			ID:        c.ID,
@@ -220,22 +189,6 @@ func cachedCreditsScore(authID string) (int64, bool) {
 		return -1, false
 	}
 	return entry.credits.TotalRemain, isCreditsExhausted(entry.credits)
-}
-
-// anyCandidateUsable reports whether at least one candidate is neither
-// exhausted (per cached credits) nor in failover cooldown. Disabled accounts
-// are already filtered out before bucketing, so only exhausted/cooldown state
-// matters here. Used by the pool cascade: a bucket only wins routing when it
-// contains a genuinely usable account; otherwise the cascade moves to the
-// next-lower pool.
-func anyCandidateUsable(cands []pluginapi.SchedulerAuthCandidate) bool {
-	for _, c := range cands {
-		_, exhausted := cachedCreditsScore(c.ID)
-		if !exhausted && !isAccountCoolingDown(c.ID) {
-			return true
-		}
-	}
-	return false
 }
 
 // isAccountPreserved reports whether the account is currently flagged by the

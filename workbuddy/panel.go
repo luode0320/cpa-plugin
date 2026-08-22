@@ -25,7 +25,6 @@ type wbAccount struct {
 	Disabled     bool            `json:"disabled"`
 	Exhausted    bool            `json:"exhausted"`
 	Selected     bool            `json:"selected"`  // panel active routing card
-	Pool         string          `json:"pool"`      // routing pool: default|priority|fallback
 	Preserve     bool            `json:"preserve"`  // watchdog parked this account; never routed
 	Credits      *creditsSummary `json:"credits,omitempty"`
 	Checkin      *checkinSummary `json:"checkin,omitempty"`
@@ -176,18 +175,15 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 	checkinAutoMu.RUnlock()
 	// Ensure default selection for panel + scheduler (first usable card).
 	activeID := ensureDefaultActiveAuth(out)
-	// Sync pool + preserve markers from the disk-backed maps — single source
-	// of truth. refreshAuthPoolFromDisk / refreshPreserveSetFromDisk also
-	// prune entries for accounts that no longer exist so the scheduler can't
-	// pin a session to a deleted auth.
-	poolSizes := refreshAuthPoolFromDisk()
+	// Sync preserve markers from the disk-backed map — single source of
+	// truth. refreshPreserveSetFromDisk also prunes entries for accounts that
+	// no longer exist so the scheduler can't pin a session to a deleted auth.
 	preserveSize := refreshPreserveSetFromDisk()
 	// Aggregate credits for panel/API consumers (all accounts currently in out).
 	sum := summarizeCredits(out)
-	// Mark selected account in list for UI; pool + preserve come from the disk mirror.
+	// Mark selected account in list for UI; preserve comes from the disk mirror.
 	for i := range out {
 		out[i].Selected = out[i].AuthID == activeID
-		out[i].Pool = poolFor(out[i].AuthID)
 		out[i].Preserve = isPreserve(out[i].AuthID)
 	}
 	resp := map[string]any{
@@ -201,7 +197,6 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 		"schedule":             []string{"09:00", "21:00"},
 		"server_time":          time.Now().Format("2006-01-02 15:04:05"),
 		"summary":              sum,
-		"pool_sizes":           poolSizes, // {priority: N, fallback: N}; default implicit
 		"preserve_pool_size":   preserveSize,
 	}
 	if len(life) > 0 {

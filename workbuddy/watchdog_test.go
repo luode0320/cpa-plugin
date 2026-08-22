@@ -21,6 +21,19 @@ func resetPreserve(t *testing.T) {
 	})
 }
 
+// storeCredits seeds accountCache with a non-exhausted (or exhausted) credits
+// entry for one auth ID and auto-clears it on test end. (Moved here from the
+// deleted pool_test.go — scheduler routing tests still need it.)
+func storeCredits(t *testing.T, id string, remain, used, total int64) {
+	t.Helper()
+	accountCache.Store(id, &accountCacheEntry{credits: &creditsSummary{
+		TotalRemain: remain,
+		TotalUsed:   used,
+		TotalSize:   total,
+	}})
+	t.Cleanup(func() { accountCache.Delete(id) })
+}
+
 // TestPreserveShouldFlip is the watchdog's decision table: an account is
 // parked in the preserve set when remain < threshold (strictly below) and
 // released when credits recover to >= threshold. No-op states must report
@@ -104,7 +117,7 @@ func TestParsePreserveFromAuthJSON(t *testing.T) {
 		{"empty doc", `{}`, false},
 		{"preserve true", `{"preserve":true}`, true},
 		{"preserve false", `{"preserve":false}`, false},
-		{"other fields only", `{"pool":"priority","disabled":true}`, false},
+		{"other fields only (legacy pool ignored)", `{"pool":"priority","disabled":true}`, false},
 		{"malformed json", `not-json{`, false},
 	}
 	for _, c := range cases {
@@ -144,7 +157,6 @@ func TestPreserveSetBasic(t *testing.T) {
 // picker must route to a healthy non-preserved account instead.
 func TestSchedulerPick_PreserveFiltered(t *testing.T) {
 	resetActiveAuth(t)
-	resetAuthPool(t)
 	resetPreserve(t)
 	resetFailover(t)
 	storeCredits(t, "wb-pres", 30, 0, 30)
@@ -173,7 +185,6 @@ func TestSchedulerPick_PreserveFiltered(t *testing.T) {
 // to the built-in scheduler.
 func TestSchedulerPick_AllPreserved_KeepsFullList(t *testing.T) {
 	resetActiveAuth(t)
-	resetAuthPool(t)
 	resetPreserve(t)
 	resetFailover(t)
 	storeCredits(t, "wb-a", 10, 0, 10)
