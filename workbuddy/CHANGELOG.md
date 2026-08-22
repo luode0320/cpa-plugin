@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.9.8
+
+### Fix — 插件面板"暂无 WorkBuddy 账号"（账号列表为空）
+
+v0.9.6 重命名 `providerName` 为 `workbuddy-provider` 后，`host_auth.go` 的
+列表过滤使用 `providerName + "-"` → `"workbuddy-provider-"`；但
+`authFileNameFor` 写入的文件名是硬编码 `"workbuddy-<uid>.json"`，**前缀
+对不上**——`host.auth.list` 过滤后是空数组 → `/accounts` 返回
+`accounts: []` → 面板渲染"暂无 WorkBuddy 账号"，且签到/领取/选择账号都
+跟着失败。同时模型能正常用，因为 host 端调度器使用另一种读取路径，
+不受 plugin 内部 prefix 过滤影响。
+
+- **`authFilePrefix` 单一真相源**（`authfile.go:34`）：抽出文件名前缀为
+  公共常量 `"workbuddy-"`。`authFileNameFor` 与 `host_auth.go` 都引用它，
+  **解耦 plugin id 与文件前缀**——以后改名 providerName 不再撞。
+- **`host_auth.go:54`**：列表过滤从 `prefix := providerName + "-"` 改为
+  `prefix := authFilePrefix`。
+- **测试守护**（`auth_prefix_test.go`）：锁死 prefix 常量值，断言
+  `authFileNameFor` 输出 = `authFilePrefix + uid + ".json"`，断言 legacy
+  无 UID 文件名也以同一 prefix 开头。
+
 ## 0.9.7
 
 ### Fix — 批量导入 UI 报错 `Failed to execute 'json' on 'Response'`

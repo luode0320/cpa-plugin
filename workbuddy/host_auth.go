@@ -48,10 +48,14 @@ func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	// files on disk don't carry a "type"/"provider" field (they were written
 	// before that convention), and EqualFold("", providerName) returns false
 	// for them — meaning we'd incorrectly exclude files that have the
-	// workbuddy- prefix but no type field. Filename prefix is the only
+	// authFilePrefix prefix but no type field. Filename prefix is the only
 	// reliable cross-version discriminator.
+	//
+	// The prefix MUST match authFilePrefix from authfile.go — never use
+	// providerName + "-" here. Decoupling the two prevents a plugin-id
+	// rename from silently stranding every auth file on disk.
 	out := make([]pluginapi.HostAuthFileEntry, 0, len(resp.Files))
-	prefix := providerName + "-"
+	prefix := authFilePrefix
 	for _, f := range resp.Files {
 		if strings.HasPrefix(strings.ToLower(f.Name), prefix) {
 			out = append(out, f)

@@ -19,7 +19,19 @@ import (
 
 // authFileNameFor matches toAuthData naming: always workbuddy-<uid>.json when UID is known.
 // Bare "workbuddy.json" is legacy single-account only (no UID).
+//
+// authFilePrefix is the single source of truth for the on-disk filename prefix.
+// host_auth.go MUST use this same constant when filtering host.auth.list results —
+// otherwise files written here are invisible to the panel. Keep this constant
+// decoupled from providerName; renaming the plugin id must not silently strand
+// auth files because the list-filter prefix stops matching the disk prefix.
 var unsafeUIDChars = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
+
+// authFilePrefix is "workbuddy-" — the filename prefix for every auth file this
+// plugin writes (workbuddy-<uid>.json for normal accounts, workbuddy.json for
+// the legacy single-account fallback). Importing this constant from elsewhere
+// is enforced by tests in auth_prefix_test.go.
+const authFilePrefix = "workbuddy-"
 
 func sanitizeUIDForFileName(uid string) string {
 	uid = strings.TrimSpace(uid)
@@ -36,7 +48,7 @@ func sanitizeUIDForFileName(uid string) string {
 func authFileNameFor(sa *storedAuth) string {
 	if sa != nil {
 		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
-			return "workbuddy-" + uid + ".json"
+			return authFilePrefix + uid + ".json"
 		}
 	}
 	return authFileName
